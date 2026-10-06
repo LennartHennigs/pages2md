@@ -1266,6 +1266,20 @@ def render_comments(doc, paras):
     return "\n".join(out)
 
 
+def render_links(doc, paras):
+    """Every hyperlink: page (when an index exists), the linked text, the URL."""
+    bounds = load_index(doc.path)
+    rows = []
+    for p in paras:
+        for a, b, url in p.get("links", []):
+            page = page_of(bounds, p["offset"] + a)
+            where = f"p.{page}  " if page else ""
+            rows.append(f"{where}“{' '.join(show(p['raw'][a:b]).split())}”  {url}")
+    if not rows:
+        return "no links\n"
+    return f"{len(rows)} link(s)\n\n" + "\n".join(rows) + "\n"
+
+
 def render_storages(doc, paras):
     """Every text storage in the document, with its handle."""
     out = [f"{'handle':<8} {'id':>10}  {'anchor':>7}  text"]
@@ -1297,7 +1311,7 @@ def render_outline(doc, paras):
 RENDERERS = {"markdown": render_markdown, "md": render_markdown,
              "outline": render_outline,
              "comments": render_comments,
-             "storages": render_storages,
+             "links": render_links, "storages": render_storages,
              "plain": render_plain, "json": render_json,
              "styles": render_styles, "archives": render_archives}
 
@@ -1328,6 +1342,8 @@ def main(argv=None):
                     dest="to", help="shorthand for -t outline")
     ap.add_argument("--comments", action="store_const", const="comments",
                     dest="to", help="shorthand for -t comments")
+    ap.add_argument("--links", action="store_const", const="links",
+                    dest="to", help="shorthand for -t links: every hyperlink")
     ap.add_argument("--list-styles", action="store_const", const="styles",
                     dest="to", help="shorthand for -t styles")
     args = ap.parse_args(argv)

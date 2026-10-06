@@ -26,7 +26,6 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
 
 ## Features
 
-- [ ] Extract all links (`pages2md.py --links`: text, URL, page or section).
 - [ ] Support a Pages package that is a folder instead of a zip.
 
 ## Code health

@@ -58,13 +58,14 @@ pages2md.py -t json report.pages
 
 | Flag | Meaning |
 | --- | --- |
-| `-t, --to FORMAT` | `markdown` (default), `plain`, `json`, `outline`, `comments`, `styles`, `archives`, `storages` |
+| `-t, --to FORMAT` | `markdown` (default), `plain`, `json`, `outline`, `comments`, `links`, `styles`, `archives`, `storages` |
 | `-o, --output FILE` | write to a file instead of stdout |
 | `--sidenotes MODE` | `inline` (default), `skip`, `only` |
 | `--in HEADING` | only the section with this heading |
 | `--page N[-M]` | only this page or page range |
 | `--outline` | shorthand for `-t outline` |
 | `--comments` | shorthand for `-t comments` |
+| `--links` | shorthand for `-t links`: every hyperlink with its page and URL |
 | `--list-styles` | shorthand for `-t styles` |
 | `--changes MODE` | `accept` (default), `reject`, `mark` |
 

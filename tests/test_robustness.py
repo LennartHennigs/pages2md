@@ -91,10 +91,6 @@ class CommentOverALineBreak(unittest.TestCase):
             self.assertNotIn("delete", msg)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StyleNames(unittest.TestCase):
     STYLES = {"Body 1": 1, "Heading 1": 2, "Heading 2": 3, "Table Style 1": 4, "Table Style 2": 5}
 
@@ -122,6 +118,37 @@ class WhereOnStructuralCommands(Base):
         with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()), \
                 mock.patch("sys.stderr", io.StringIO()):
             E.main(["delete-paragraph", "--on", "Body", "--where", "notes", self.path])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class ExtractLinks(unittest.TestCase):
+    def run_reader(self, name):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            P.main(["--links", os.path.join(HERE, "samples", name)])
+        return out.getvalue()
+
+    def test_lists_text_and_url(self):
+        out = self.run_reader("formatting.pages")
+        self.assertIn("1 link(s)", out)
+        self.assertIn("“aliquip”  http://google.de", out)
+
+    def test_several_links(self):
+        out = self.run_reader("sample-content.pages")
+        self.assertIn("2 link(s)", out)
+        self.assertIn("https://lennarthennigs.de/dtw/10", out)
+
+    def test_none(self):
+        self.assertEqual(self.run_reader("kitchen-sink.pages"), "no links\n")
+
+    def test_same_as_t_links(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            P.main(["-t", "links", os.path.join(HERE, "samples", "formatting.pages")])
+        self.assertEqual(out.getvalue(), self.run_reader("formatting.pages"))
 
 
 if __name__ == "__main__":

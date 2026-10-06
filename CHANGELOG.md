@@ -10,6 +10,8 @@ Add each change here in the same commit that makes it.
 
 ### Added
 
+- `pages2md.py --links` (or `-t links`) lists every hyperlink: page (with an index), the
+  linked text and the URL. `--in` and `--page` narrow it like any other format.
 - Footnotes render as Markdown footnotes: a `[^n]` where the reference stands, numbered
   in reading order for the whole document, with the `[^n]:` definitions collected at the
   end. Later paragraphs of a note are indented and a manual line break inside one becomes
