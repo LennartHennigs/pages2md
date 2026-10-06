@@ -166,6 +166,22 @@ def shift_ranges(val, start, end, delta):
     return emit(rebuilt), moved
 
 
+def last_per_index(val):
+    """An index-keyed table with only the last entry at each index.
+
+    Replacing the whole of an annotated stretch collapses its run to nothing, and
+    the entries that opened and closed it land on one index. Pages never writes two
+    entries at an index, and the later one is what the run-length rule says applies:
+    a run that starts where another was just closed wins, and a closer after an
+    opener ends a run of zero length. Tables with no duplicates come back untouched.
+    """
+    rows = [(i, sub) for i, _r, sub in entry_rows(val)]
+    if len({i for i, _s in rows}) == len(rows):
+        return val
+    kept = dict(rows)                       # later entries replace earlier ones
+    return emit([(1, 2, kept[i]) for i in sorted(kept)])
+
+
 def shift_table(val, start, end, delta):
     """Rewrite the character index of every entry in one attribute table."""
     kind = table_kind(val)
@@ -198,7 +214,7 @@ def shift_table(val, start, end, delta):
                 sub = write_varint(j)
             new_inner.append((num, wire, sub))
         rebuilt.append((1, 2, emit(new_inner)))
-    return emit(rebuilt), moved
+    return last_per_index(emit(rebuilt)), moved
 
 
 C_ID = 5                      # editor-only: a comment's own identifier pair
@@ -1196,6 +1212,12 @@ class Document:
         self._msg = emit(rebuilt)
 
     def save(self, out_path):
+        """Write the package -- but only if what was written reads back well-formed.
+
+        The new file is checked with both tools before it replaces anything: a
+        write that produced an ill-formed table once left a document that
+        pages2md could not open, while the editor's own re-read said "OK".
+        """
         payload = pack_archives(self.arcs)
         self.entries[BODY_ENTRY] = iwa_encode(payload)
         tmp = out_path + ".tmp"
@@ -1203,6 +1225,13 @@ class Document:
             for n in self.names:          # preserve order and storage method
                 z.writestr(n, self.entries[n],
                            compress_type=self.compress.get(n, zipfile.ZIP_STORED))
+        problems = written_problems(tmp)
+        if problems:
+            os.remove(tmp)
+            sys.exit(f"refusing to write {out_path}: the result would be an ill-formed "
+                     f"document ({'; '.join(problems[:4])}). Nothing was changed. "
+                     "This is a bug in pages_edit; the edit that caused it is worth "
+                     "reporting.")
         os.replace(tmp, out_path)
 
 
@@ -1234,6 +1263,60 @@ from pages2md import _ref as ref_of   # skip a TSP.Reference's tag byte, read th
 # Pages 15.4 does for the body too, not only for text boxes.
 RUN_TABLES = (F_CHAR_TBL, F_INSERTIONS, F_DELETIONS, F_COMMENTS_RUN)
 CHANGE_TABLES = (F_INSERTIONS, F_DELETIONS)
+
+
+# ------------------------------------------------------ well-formedness
+def table_problems(doc):
+    """Ways an attribute table in any storage can be ill-formed, as readable strings.
+
+    Every index-keyed table must be sorted, hold one entry per index, and stay inside
+    the text (an index equal to the length is fine); a range table must end inside it.
+    Pages writes nothing else -- the real samples are clean -- so anything else came
+    from an edit. The selected storage is left as it was.
+    """
+    selected, out = doc.slot, []
+    for handle in doc.slots:
+        doc.select(handle)
+        length = len(doc.text()[0])
+        for num, wire, val in tokenize(doc._msg):
+            if num == F_TEXT or wire != 2:
+                continue
+            kind = table_kind(val)
+            if kind == "index":
+                idx = []
+                for n, w, sub in tokenize(val):          # file order, not sorted order
+                    fields = parse_fields_of(sub) if (n, w) == (1, 2) else {}
+                    if 1 in fields:
+                        idx.append(read_varint(fields[1][0], 0)[0])
+                where = f"{handle} field {num}"
+                if idx != sorted(idx):
+                    out.append(f"{where}: unsorted entries {idx[:6]}")
+                dup = sorted({i for i in idx if idx.count(i) > 1})
+                if dup:
+                    out.append(f"{where}: duplicate index {dup[:4]}")
+                if idx and max(idx) > length:
+                    out.append(f"{where}: index {max(idx)} past the end of the text ({length})")
+            elif kind == "range":
+                for sub in parse_fields_of(val).get(1, []):
+                    span = parse_fields_of(parse_fields_of(sub)[1][0])
+                    a = read_varint(span[1][0], 0)[0] if 1 in span else 0
+                    n_ = read_varint(span[2][0], 0)[0] if 2 in span else 0
+                    if a + n_ > length:
+                        out.append(f"{handle} field {num}: range {a}+{n_} past the end "
+                                   f"of the text ({length})")
+    doc.slot = selected
+    return out
+
+
+def written_problems(path):
+    """Everything wrong with a document we just wrote, read back with both tools."""
+    try:
+        check = Document(path)
+        problems = table_problems(check)
+        check.reader.all_paragraphs()           # the reader must manage it too
+    except Exception as exc:
+        return [f"cannot read it back: {exc!r}"]
+    return problems
 
 
 # ------------------------------------------------------ fingerprint and plans
@@ -1694,8 +1777,13 @@ def verify(path, edits, tracked=False):
             doc.select(handle)
             parts.append(doc.accepted_map()[0])
         text = "\x00".join(parts)
+        doc.reader.all_paragraphs()             # and pages2md must be able to read it
+        problems = table_problems(doc)
     except Exception as exc:
-        print(f"VERIFY FAILED: cannot re-read {path}: {exc}")
+        print(f"VERIFY FAILED: cannot re-read {path}: {exc!r}")
+        return "?"
+    if problems:
+        print(f"VERIFY FAILED: ill-formed tables in {path}: {'; '.join(problems[:4])}")
         return "?"
     missing = [new for _rs, _re, new, _old in edits if new and new not in text]
     stale = [old for _rs, _re, _new, old in edits if tracked and old in text]

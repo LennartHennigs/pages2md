@@ -413,6 +413,15 @@ a second round of bullet-bleed after the pattern seemed handled. For the tables 
 mean "the span ends here", the same rule reads: carry the value in force after the
 deleted text back to where it started, and close a run at an insertion.
 
+A run can also be edited out of existence. Replacing the whole of a bold word, a comment
+anchor or a language run with nothing moves both of its entries -- the opener and the
+closer -- onto one index. Pages never writes two entries at an index, and the reader's
+`sorted((index, ref))` raised `TypeError` comparing a reference with `None`. The rule that
+applies is the later entry (an opener after a closer starts the run; a closer after an
+opener ends a run of zero length), so `shift_table` keeps the last entry per index, and
+`Document.save` checks every table before replacing the file. The real samples are clean
+under that check, which is what makes it a safe test of a write.
+
 One table is the exception that proves the rule: for a list level an *inserted*
 paragraph should inherit, because the new item is a sibling of the one before it.
 Work out which behaviour is wanted per table; do not apply one rule to all of them.

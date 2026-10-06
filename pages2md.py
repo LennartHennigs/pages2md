@@ -395,8 +395,11 @@ class PagesDoc:
         """ObjectAttributeTable -> sorted [(char_index, ref|None)]."""
         if field not in f:
             return []
-        return sorted((i, _ref(ef[2][0]) if 2 in ef else None)
-                      for i, ef in PagesDoc._entries(f, field))
+        # sorted by index alone, and stable: comparing (index, ref) tuples crashed on two
+        # entries at one index (a ref and None); the later of them stays later and wins
+        return sorted(((i, _ref(ef[2][0]) if 2 in ef else None)
+                       for i, ef in PagesDoc._entries(f, field)),
+                      key=lambda row: row[0])
 
     @staticmethod
     def _entries(f, field):

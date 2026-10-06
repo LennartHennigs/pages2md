@@ -309,6 +309,14 @@ def check(outdir):
             results.append(Result(name, False, [f"cannot read the saved file: {exc!r}"], notes))
             continue
         problems += [describe_difference(k, want[k], got[k]) for k in want if want[k] != got[k]]
+        if info["kind"] != "control":
+            # what we wrote must itself be well-formed, whatever the renderings say
+            problems += [f"our write has ill-formed tables: {p}" for p in
+                         E.table_problems(E.Document(os.path.join(outdir, "edited", name + ".pages")))]
+        irregular = E.table_problems(E.Document(saved))
+        if irregular:
+            notes.append(f"Pages' own file has {len(irregular)} table irregularit"
+                         f"{'y' if len(irregular) == 1 else 'ies'}: {irregular[0][:80]}")
         mine, ctrl = counts.get(name), counts.get(info["control"])
         if mine:
             notes.append(f"{mine['pages']} pages, {mine['chars']} chars")

@@ -52,6 +52,10 @@ drive `pages_edit.main` patch it (`mock.patch.object(E, "pages_has_open", return
    per table: see the table in `insights.md` ("Run-length structures bite every time").
    Insertion wants a different answer for different tables (a new bold-run paragraph
    starts plain; a new list item takes its predecessor's level).
+   A table must stay well-formed: sorted, **one entry per index**, inside the text.
+   `shift_table` collapses duplicates (`last_per_index`) and `Document.save` refuses to write
+   anything `table_problems` flags, so a new edit path cannot quietly break it; add the new
+   path to `tests/test_table_integrity.py`.
 4. **Edit a structure through the rule that interprets it**, not through its raw bytes
    (`put_span` rebuilds a change table from its spans; do not patch entries).
 5. **Paragraph boundaries come from `flow_view`**, in both tools: a `\x0e` with an

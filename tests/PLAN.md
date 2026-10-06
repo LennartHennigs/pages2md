@@ -17,6 +17,7 @@ same zip → IWA → archive → storage path as a real document.
 | `test_markdown_fidelity.py` | hyperlinks (offsets, emoji, deletion, emphasis nesting, URL quoting), tight, numbered and nested lists, restarts, strikethrough, escaping table |
 | `test_edit_tables.py` (`DeleteParagraphKeepsListLevels`) | list levels survive paragraph deletion; insertion is a sibling |
 | `test_roundtrip_harness.py` | the Pages round-trip harness against a stand-in Pages: all cases prepared and readable, identity passes, a lost edit / lost headings / missing file / timeout / growing page count are caught |
+| `test_table_integrity.py` | tables stay sorted, one entry per index and inside the text after any edit (collapsed runs, tracked changes, comments, paragraph styles); the reader tolerates duplicates; `save` refuses ill-formed output; `verify` reads with the reader; seeded random replacements on every sample |
 | `test_guard.py` | the Pages-open guard does not crash without `osascript` |
 | `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 

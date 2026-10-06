@@ -94,6 +94,11 @@ Add each change here in the same commit that makes it.
   (`footnote_marks`), of a storage's text (`storage_text`) and of the entry in force at an
   index (`row_at`); `format` uses the same table helpers as the other edits. Removed the
   unused `_emphasize` and `P_BASELINE`.
+- `Document.save` checks what it wrote before it replaces anything: every attribute table must be
+  sorted, hold one entry per index and stay inside the text, and the file must read back with both
+  tools. If not it refuses, leaves the document untouched and says so. `verify` (the check after
+  a write) now reads with `pages2md` as well, and `tests/pages_roundtrip.py` reports ill-formed
+  tables in what we wrote.
 - Markdown lists are tight: consecutive items of one list have no blank line between them.
   Numbered items used to come out as `-`.
 - Markdown output escapes text that would turn into markup (`*`, `` ` ``, `[`, `]`, `\`,
@@ -146,6 +151,14 @@ Add each change here in the same commit that makes it.
 - The Markdown importer turned `my_var_name` into italic `myvarname`.
 - **Underline was read from the wrong style property** (10, which only a footnote reference
   sets); it is 11. The JSON `runs` underline flag is now right.
+- **Replacing a whole annotated stretch with nothing wrote duplicate table entries.** Deleting a
+  bold word (or a comment anchor, a language run, a tracked change) collapsed its run to zero
+  width and left two entries at one index. `pages2md.py` then crashed reading the file
+  (`TypeError`) while the editor's own re-read said "OK", and Pages never writes such tables.
+  The editor now keeps one entry per index when it shifts a table (the later one, which is what
+  the run-length rule says applies); the reader sorts by index alone and no longer crashes on
+  duplicates in a file it is given. Found by random edits on the real samples; the round-trip
+  case `replace-all-with-footnote` had been writing five of them.
 - Deleting a paragraph dropped its entry in the list-level table, demoting the list items
   after it that relied on that entry (a nested item became a top-level one).
 

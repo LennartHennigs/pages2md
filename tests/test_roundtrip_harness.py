@@ -4,7 +4,7 @@ The real thing needs macOS and Pages. Here a fake `osascript` copies the input t
 output, which is what a Pages that rewrites a file without changing its content would
 do. The harness must pass that and must catch anything less.
 """
-import os, shutil, subprocess, sys, tempfile, unittest
+import os, shutil, subprocess, sys, tempfile, unittest, zipfile
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +67,31 @@ class Harness(unittest.TestCase):
                 else:
                     self.assertFalse(snap_same, f"{name} did not change anything")
                     self.assertIsInstance(same, bool)
+
+    def test_every_prepared_file_has_well_formed_tables(self):
+        for name in self.names:
+            with self.subTest(case=name):
+                self.assertEqual(E.table_problems(E.Document(self.edited(name))), [])
+
+    def test_an_ill_formed_write_is_a_failure_even_if_it_renders_the_same(self):
+        with tempfile.TemporaryDirectory() as d:          # its own pack: this one is damaged
+            pack = os.path.join(d, "p")
+            R.prepare(pack, only=["control", "replace-plain"])
+            shutil.copytree(os.path.join(pack, "edited"), os.path.join(pack, "saved"),
+                            dirs_exist_ok=True)
+            edited = os.path.join(pack, "edited", "replace-plain.pages")
+            doc = E.Document(edited)
+            doc.select("body")
+            doc._put_field(E.F_CHAR_TBL, E.emit([(1, 2, E.entry_bytes(3, None)),
+                                                 (1, 2, E.entry_bytes(3, None))]))
+            payload = E.pack_archives(doc.arcs)     # write the bad bytes the way a bug would,
+            with zipfile.ZipFile(edited, "w") as z:  # past save()'s own refusal
+                for n in doc.names:
+                    z.writestr(n, E.iwa_encode(payload) if n == E.BODY_ENTRY else doc.entries[n])
+            results = {r.name: r for r in R.check(pack)}
+        self.assertFalse(results["replace-plain"].ok)
+        self.assertIn("ill-formed tables", " ".join(results["replace-plain"].problems))
+        self.assertTrue(results["control"].ok)
 
     def test_edited_files_read_in_both_tools(self):
         for name in self.names:
