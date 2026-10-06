@@ -177,7 +177,7 @@ class KitchenSink(unittest.TestCase):
     def test_tracked_changes(self):
         self.assertIn("This is an insert", markdown(KITCHEN))
         self.assertNotIn("This is an insert", markdown(KITCHEN, "--changes", "reject"))
-        self.assertIn("## Heading~~ 2~~", markdown(KITCHEN, "--changes", "mark"))
+        self.assertIn("## Heading ~~2~~", markdown(KITCHEN, "--changes", "mark"))
 
     def test_comments_in_body_and_note(self):
         # Pages stores this comment's text with a trailing newline
