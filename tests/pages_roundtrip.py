@@ -28,7 +28,7 @@ NOT YET RUN AGAINST A REAL PAGES: the AppleScript below follows Pages' scripting
 dictionary but has only been exercised with a stand-in. If `run` reports a script
 error, use the manual route and say what the error was.
 """
-import collections, difflib, io, json, os, shutil, subprocess, sys, tempfile, time
+import collections, difflib, io, json, os, shutil, subprocess, sys, time
 from contextlib import redirect_stdout
 from unittest import mock
 

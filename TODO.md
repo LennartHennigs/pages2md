@@ -28,8 +28,6 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
 
 - [ ] Body detection is duplicated between reader and editor (rule 7 in `CLAUDE.md`).
 - [ ] Naming drift: margin note, sidenote, note.
-- [ ] Dead imports (`pages_edit.fingerprint_parts`, unused names in `fixture.py` and the
-      tests); `T_AUTHOR` is unused; `squeeze` is defined inside a loop.
 - [ ] `Document.apply()` is O(edits × tables), about 38 ms per edit; `Document` loads the
       whole package including media.
 - [ ] Coverage is 85%. Missing tests: `plan`, `section_range`, `--page`, the page index,

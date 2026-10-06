@@ -1280,7 +1280,7 @@ class Document:
 from pages2md import (outline, section_range, index_path, load_index,
                       text_fingerprint,
                       build_index, page_of, page_range, pages_has_open,
-                      fingerprint_parts, style_ids, list_style_ids,
+                      style_ids, list_style_ids,
                       char_style_ids, package_errors,
                       # one definition of the reverse-engineered field numbers:
                       # two tables that must agree is the worst failure mode

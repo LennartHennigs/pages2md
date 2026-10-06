@@ -3,9 +3,9 @@ import os, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from fixture import (write_pages, table, footnote, char_style, hyperlink,
+from fixture import (write_pages, table, char_style, hyperlink,
                      list_style, para_starts, para_levels, T_CHAR_STYLE, F_PARA_TBL,
-                     F_LIST_TBL, F_CHAR_TBL, F_DELETIONS, F_ATTACHMENTS)
+                     F_LIST_TBL, F_CHAR_TBL, F_DELETIONS)
 import pages2md as P
 
 F_SMARTFIELD, F_PARA_STARTS, F_LEVELS = 11, 14, 6

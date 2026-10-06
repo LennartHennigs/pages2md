@@ -60,7 +60,7 @@ T_ATTACHMENT = 2008
 F_ATTACHED_STORAGE = 2        # the attachment's reference to its storage
 F_COMMENTS = 25               # body: {start, length} -> comment-reference
 F_COMMENTS_RUN = 23           # text boxes: a run-length index table instead
-T_COMMENT_REF, T_COMMENT, T_AUTHOR = 2013, 3056, 212
+T_COMMENT_REF, T_COMMENT = 2013, 3056
 C_TEXT, C_DATE, C_AUTHOR, C_NEXT = 1, 2, 3, 4   # inside a comment archive
 APPLE_EPOCH = 978307200       # 2001-01-01, Core Foundation absolute time
 F_NAME, F_IDENT, F_PARENT = 1, 2, 3          # inside the nested TSS.StyleArchive
@@ -592,23 +592,10 @@ class PagesDoc:
                 links.append((max(a, pos) - pos, min(b, pos + len(raw)) - pos, url))
             if drop:
                 keep = [k for k in range(len(raw)) if pos + k not in drop]
-                remap = {}
-                for new, old in enumerate(keep):
-                    remap[old] = new
-                remap[len(raw)] = len(keep)
+                remap = {len(raw): len(keep)}
+                remap.update((old, new) for new, old in enumerate(keep))
                 raw = "".join(raw[k] for k in keep)
-
-                def squeeze(spans):
-                    """Move (start, end, ...) spans onto the shrunken text."""
-                    out = []
-                    for s, e, *rest in spans:
-                        ns = remap.get(s, bisect.bisect_left(keep, s))
-                        ne = remap.get(e, bisect.bisect_left(keep, e))
-                        if ne > ns:
-                            out.append((ns, ne, *rest))
-                    return out
-
-                runs, links = squeeze(runs), squeeze(links)
+                runs, links = (_squeeze(runs, keep, remap), _squeeze(links, keep, remap))
             struck = []
             if marks:
                 # bisect the span *ends* so a long span starting far back is
@@ -1010,6 +997,17 @@ def flow_view(text, marks):
         out += [text[prev:i], "\ufffc"]
         prev = i + 1
     return "".join(out) + text[prev:]
+
+
+def _squeeze(spans, keep, remap):
+    """Move (start, end, ...) spans onto text that lost the characters not in `keep`."""
+    out = []
+    for s, e, *rest in spans:
+        ns = remap.get(s, bisect.bisect_left(keep, s))
+        ne = remap.get(e, bisect.bisect_left(keep, e))
+        if ne > ns:
+            out.append((ns, ne, *rest))
+    return out
 
 
 def _clean(s, keep_breaks=True):

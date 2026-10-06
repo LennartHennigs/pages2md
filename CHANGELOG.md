@@ -63,6 +63,9 @@ Add each change here in the same commit that makes it.
 
 ### Changed
 
+- Housekeeping, no change in output (checked against every sample): dead imports and the
+  unused `T_AUTHOR` removed, the span-squeezing helper in the reader is a function of its
+  own.
 - `delete-paragraph` and `import --replace-section` refuse text that holds a footnote
   reference. They used to remove the reference and leave the note's storage and archives
   behind, unreferenced; nobody has seen Pages open such a file.

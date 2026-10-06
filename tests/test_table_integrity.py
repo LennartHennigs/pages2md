@@ -13,7 +13,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from fixture import (write_pages, table, rows, tables_of, char_style, T_CHAR_STYLE,
-                     F_PARA_TBL, F_CHAR_TBL, F_INSERTIONS, F_DELETIONS)
+                     F_PARA_TBL, F_CHAR_TBL, F_DELETIONS)
 import pages_edit as E
 import pages2md as P
 

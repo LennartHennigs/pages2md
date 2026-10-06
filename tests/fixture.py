@@ -10,7 +10,8 @@ import os, struct, sys, zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from iwa_codec import emit, write_varint, pack_archives, iwa_encode, read_varint
 import pages_edit as E
-from pages2md import (T_STORAGE, T_ATTACHMENT, T_CHAR_STYLE, T_LIST_STYLE,
+# some names are only imported to be re-exported: the tests take them from here
+from pages2md import (T_STORAGE, T_ATTACHMENT, T_CHAR_STYLE, T_LIST_STYLE,  # noqa: F401
                       P_BOLD, P_ITALIC, P_UNDERLINE, P_STRIKE, F_PROPS, F_LIST_LABEL,
                       F_TEXT, F_PARA_TBL, F_LIST_TBL, F_CHAR_TBL,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS, F_ATTACHMENTS)
