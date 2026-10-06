@@ -731,7 +731,7 @@ class Document:
                     raw = self.text()[0]
                     sys.exit(
                         f"that text overlaps an existing comment on "
-                        f"{raw[a:a + n].strip()!r} in this text box. A text "
+                        f"{show(raw[a:a + n]).strip()!r} in this text box. A text "
                         "box keys comments by character run, so two "
                         "overlapping ones cannot both be stored. Pick text "
                         "outside it.")
@@ -900,6 +900,7 @@ class Document:
         """Insert a whole paragraph starting at `at` (a paragraph boundary)."""
         self._require_single_chunk()
         raw = self.text()[0]
+        text = u16(text)
         # at the very end there may be no terminator to insert after, so the
         # new text would run on into the last paragraph
         lead = "" if (at == 0 or raw[at - 1:at] in (PARA_END, "")) else PARA_END
@@ -995,8 +996,15 @@ class Document:
         return ident
 
     def text(self):
+        """(UTF-16 view of the selected storage's text, chunk count).
+
+        The view's indices are the attribute tables' indices, so every
+        offset below is in Pages' own units. Anything typed by the user goes
+        through u16() before it meets this text, and anything shown goes
+        through show().
+        """
         chunks = [v for num, _w, v in tokenize(self._msg) if num == F_TEXT]
-        return b"".join(chunks).decode("utf-8"), len(chunks)
+        return u16(b"".join(chunks).decode("utf-8")), len(chunks)
 
     def deletions(self):
         """Tracked-change deletion spans, so we can show the accepted view."""
@@ -1035,6 +1043,7 @@ class Document:
         report = []
         # right-to-left so earlier offsets stay valid
         for start, end, new in sorted(edits, reverse=True):
+            start, end, new = minimal_edit(raw, start, end, new)
             delta = len(new) - (end - start)
             raw = raw[:start] + new + raw[end:]
             moved = 0
@@ -1123,7 +1132,8 @@ class Document:
         rebuilt, done = [], False
         for num, wire, val in tokenize(self._msg):
             if num == F_TEXT and not done:
-                val, done = raw.encode("utf-8"), True
+                # strict: a half-pair here means an edit split an emoji
+                val, done = from_u16(raw).encode("utf-8"), True
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
 
@@ -1150,14 +1160,18 @@ from pages2md import (outline, section_range, index_path, load_index,
                       F_TEXT, F_PARA_TBL, F_LIST_TBL, F_COMMENTS,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS_RUN,
                       C_TEXT, C_DATE, C_AUTHOR, C_NEXT, APPLE_EPOCH,
-                      PARA_BREAKS, PARA_SPLIT)
+                      PARA_BREAKS, PARA_SPLIT,
+                      # text is handled as a UTF-16 view; see pages2md
+                      u16, from_u16, show)
 from pages2md import _ref as ref_of   # skip a TSP.Reference's tag byte, read the varint
 
 # Run-length tables of references where a null entry means "no value from
 # here": the run in force is exactly what the entries say, so a structural
 # edit has to carry it explicitly. Paragraph and list styles are the other
 # kind (null = "no change") and get _restate_following instead.
-RUN_TABLES = (F_CHAR_TBL, F_INSERTIONS, F_DELETIONS)
+# Comments join them when a storage keys them run-length (field 23), which
+# Pages 15.4 does for the body too, not only for text boxes.
+RUN_TABLES = (F_CHAR_TBL, F_INSERTIONS, F_DELETIONS, F_COMMENTS_RUN)
 CHANGE_TABLES = (F_INSERTIONS, F_DELETIONS)
 
 
@@ -1171,7 +1185,7 @@ def fingerprint(doc):
     parts = []
     for handle in doc.slots:                 # body first, then notes by anchor
         doc.select(handle)
-        parts.append(doc.text()[0])
+        parts.append(from_u16(doc.text()[0]))
     doc.select("body")
     return fingerprint_parts(parts)
 
@@ -1268,8 +1282,8 @@ def describe_plan(resolved, expected, actual, path):
         for handle, eds in gs:
             for rs, _re, new, old in eds:
                 tag = "" if handle == "body" else f" [{handle}]"
-                print(f"   @{rs:<6}{tag} {old!r}")
-                print(f"   {'':7} -> {new!r}")
+                print(f"   @{rs:<6}{tag} {show(old)!r}")
+                print(f"   {'':7} -> {show(new)!r}")
     return total
 
 
@@ -1341,6 +1355,7 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
     else:
         hay, keep = doc.accepted_map()
     # MULTILINE so ^ and $ anchor to paragraphs, which is what a caller means
+    pattern = u16(pattern)
     rx = re.compile(pattern if regex else re.escape(pattern), re.MULTILINE)
     out = []
     for h in rx.finditer(hay.translate(SEARCH_VIEW)):
@@ -1369,8 +1384,14 @@ def check_edits(doc, selected, replacement, regex, label=None):
     raw = doc.text()[0]
     edits = []
     for rs, re_, acc, span, old, h in selected:
+        if replacement is not None:
+            replacement = u16(replacement)
         new = (h.expand(replacement) if regex and replacement is not None
                else replacement)
+        if splits_pair(raw, rs) or splits_pair(raw, re_):
+            sys.exit(f"{tag}match at offset {rs} starts or ends inside an "
+                     "emoji or other character outside the BMP; widen it to "
+                     "the whole character")
         if re_ - rs != span:
             sys.exit(f"{tag}match at accepted offset {acc} spans a tracked "
                      "deletion; resolve that edit in Pages first, or use --raw")
@@ -1380,6 +1401,37 @@ def check_edits(doc, selected, replacement, regex, label=None):
                      "that character. Narrow the match to one side of it.")
         edits.append((rs, re_, new, old))
     return edits
+
+
+def splits_pair(view, i):
+    """True if offset `i` falls between the two halves of a surrogate pair."""
+    return ("\udc00" <= view[i:i + 1] <= "\udfff"
+            and "\ud800" <= view[i - 1:i] <= "\udbff")
+
+
+def minimal_edit(raw, start, end, new):
+    """Shrink a replacement to the part that actually changes.
+
+    Text shared at both ends of old and new is left alone, so formatting
+    that starts or ends inside it stays on the same characters. Replacing
+    "xx Bold" with "x Bold" otherwise clamps the bold run's start to a
+    position inside the replacement and bolds "old" instead of "Bold".
+    Never trims to a boundary inside a surrogate pair: two emoji can share
+    their first half.
+    """
+    old = raw[start:end]
+    room = min(len(old), len(new))
+    p = 0
+    while p < room and old[p] == new[p]:
+        p += 1
+    if p and "\ud800" <= old[p - 1] <= "\udbff":
+        p -= 1
+    q = 0
+    while q < room - p and old[-1 - q] == new[-1 - q]:
+        q += 1
+    if q and "\udc00" <= old[len(old) - q] <= "\udfff":
+        q -= 1
+    return start + p, end - q, new[p:len(new) - q]
 
 
 def search(doc, pattern, use_raw, regex, scope, handles):
@@ -1423,7 +1475,7 @@ def resolve(doc, pattern, replacement, which, use_raw, regex, scope=None,
     if not found:
         doc.select("body")
         hint = ""
-        if not use_raw and pattern in doc.text()[0]:
+        if not use_raw and u16(pattern) in doc.text()[0]:
             hint = ("  (it does appear in the raw text -- tracked changes may "
                     "split it; try --raw)")
         extra = "" if where == "all" else f" of {where}"
@@ -1497,9 +1549,9 @@ def cmd_find(args):
           f"{'raw' if args.raw else 'accepted'} text")
     for n, (handle, hay, h, rs) in enumerate(found, 1):
         lo, hi = max(h.start() - 45, 0), min(h.end() + 45, len(hay))
-        pre = hay[lo:h.start()].replace("\n", "⏎")
-        mid = hay[h.start():h.end()]
-        post = hay[h.end():hi].replace("\n", "⏎")
+        pre = show(hay[lo:h.start()]).replace("\n", "⏎")
+        mid = show(hay[h.start():h.end()])
+        post = show(hay[h.end():hi]).replace("\n", "⏎")
         page = page_of(bounds, rs if handle == "body" else doc.anchors[handle])
         where = f"p.{page} " if page else ""
         print(f"  {n:3}. {where}@{rs:<6}{label_of(doc, handle)} "
@@ -1524,8 +1576,10 @@ def cmd_replace(args):
           f" ({'tracked change' if mode else 'direct replacement'}):")
     for handle, eds in groups:
         for rs, re_, new, old in eds:
-            print(f"  @{rs}{label_of(doc, handle)}  {old!r}  ->  {new!r}")
-            for line in difflib.unified_diff([old + "\n"], [new + "\n"],
+            print(f"  @{rs}{label_of(doc, handle)}  {show(old)!r}  ->  "
+                  f"{show(new)!r}")
+            for line in difflib.unified_diff([show(old) + "\n"],
+                                             [show(new) + "\n"],
                                              "before", "after", n=0,
                                              lineterm="\n"):
                 if line.startswith(("+", "-")) and not line.startswith(
@@ -1570,7 +1624,7 @@ def cmd_replace(args):
 def _summary(edits):
     first = edits[0]
     more = f" (+{len(edits) - 1} more)" if len(edits) > 1 else ""
-    return f"Replace {first[3]!r} -> {first[2]!r}{more}"
+    return f"Replace {show(first[3])!r} -> {show(first[2])!r}{more}"
 
 
 def verify(path, edits, tracked=False):
@@ -1681,7 +1735,8 @@ def locate_comment(doc, args):
                      "use --on with distinguishing text")
         return hit[0]
     raw = doc.text()[0]
-    hit = [r for r in rows if args.on.lower() in raw[r[0]:r[0] + r[1]].lower()]
+    on = u16(args.on).lower()
+    hit = [r for r in rows if on in raw[r[0]:r[0] + r[1]].lower()]
     if not hit:
         sys.exit(f"no comment whose quoted text contains {args.on!r}")
     if len(hit) > 1:
@@ -1750,16 +1805,17 @@ def cmd_comment_add(args):
         # byte-identical in structure to one Pages wrote itself. Something
         # further is required that I have not identified, so refuse rather
         # than write something that silently disappears.
-        sys.exit(f"{old!r} is in {handle}, not the body flow. Comments can be "
+        sys.exit(f"{show(old)!r} is in {handle}, not the body flow. Comments can be "
                  "read there but not written: Pages drops a tool-written one "
                  "on its next save. Add it in Pages, or comment on the body "
                  "text that references it.")
-    print(f"comment on @{start}{label_of(doc, handle)} “{old}”:\n  {args.text}")
+    print(f"comment on @{start}{label_of(doc, handle)} “{show(old)}”:\n"
+          f"  {args.text}")
     if args.write:
         doc.select(handle)
         doc.add_comment(start, end - start, args.text)
         doc.select("body")
-    finish_comment(doc, args, f"Add comment on {old[:40]!r}")
+    finish_comment(doc, args, f"Add comment on {show(old[:40])!r}")
 
 
 def cmd_comment_reply(args):
@@ -1767,7 +1823,7 @@ def cmd_comment_reply(args):
     start, length, ref = locate_comment(doc, args)
     raw = doc.text()[0]
     print(f"reply to the comment on @{start} "
-          f"“{raw[start:start + length][:60]}”:\n  {args.text}")
+          f"“{show(raw[start:start + length][:60])}”:\n  {args.text}")
     if args.write:
         doc.reply_to(ref, args.text)
     finish_comment(doc, args, f"Reply to comment @{start}")
@@ -1777,7 +1833,8 @@ def cmd_comment_delete(args):
     doc = comment_preamble(args)
     start, length, ref = locate_comment(doc, args)
     raw = doc.text()[0]
-    print(f"delete the comment on @{start} “{raw[start:start + length][:60]}”")
+    print(f"delete the comment on @{start} "
+          f"“{show(raw[start:start + length][:60])}”")
     if args.write:
         doc.delete_comment(ref)
     finish_comment(doc, args, f"Delete comment @{start}")
@@ -1835,7 +1892,7 @@ def cmd_retag(args):
     raw, ps, pe = located_paragraph(doc, start)
     print(f"retag the paragraph at @{ps} as {args.style!r} ({display!r})"
           + (f", list {args.list!r}" if args.list else "") + ":")
-    print(f"  {raw[ps:pe][:90]!r}")
+    print(f"  {show(raw[ps:pe][:90])!r}")
     if args.write:
         doc.retag(start, style_id, list_id)
     finish_struct(doc, args, f"Retag @{ps} as {args.style}")
@@ -1849,7 +1906,7 @@ def cmd_insert(args):
     at = after_paragraph(raw, pe) if args.after else ps
     print(f"insert {'after' if args.after else 'before'} the paragraph at @{ps}"
           f", as {args.style or 'the surrounding style'} ({display}):")
-    print(f"  anchor: {raw[ps:pe][:80]!r}")
+    print(f"  anchor: {show(raw[ps:pe][:80])!r}")
     print(f"  new:    {args.text[:80]!r}")
     if args.write:
         doc.insert_paragraph(at, args.text, style_id)
@@ -1861,7 +1918,7 @@ def cmd_delete_para(args):
     start, end, _n, old = one_match(doc, args, args.on)
     raw, ps, pe = located_paragraph(doc, start)
     print(f"delete the paragraph at @{ps}:")
-    print(f"  {raw[ps:pe][:110]!r}")
+    print(f"  {show(raw[ps:pe][:110])!r}")
     if args.write:
         doc.delete_paragraph(start)
     finish_struct(doc, args, f"Delete paragraph @{ps}")
@@ -1877,7 +1934,7 @@ def cmd_format(args):
         sys.exit("--plain removes emphasis; it cannot be combined with "
                  "--bold or --italic")
     print(f"format @{start} as {', '.join(kinds) if kinds else 'plain'}:")
-    print(f"  {old[:90]!r}")
+    print(f"  {show(old[:90])!r}")
     if args.write:
         doc.select("body")
         doc.format_run(start, end, bold=args.bold, italic=args.italic)
@@ -1887,7 +1944,8 @@ def cmd_format(args):
 
 def cmd_import(args):
     doc = comment_preamble(args)
-    blocks = parse_markdown(open(args.markdown, encoding="utf-8").read())
+    with open(args.markdown, encoding="utf-8") as fh:
+        blocks = parse_markdown(u16(fh.read()))     # runs in Pages' units
     if not blocks:
         sys.exit(f"{args.markdown}: nothing to import")
     styles, lists = style_ids(doc.reader), list_style_ids(doc.reader)
@@ -1908,7 +1966,7 @@ def cmd_import(args):
               f"{args.markdown}:")
         for s in going[:3]:
             _a, b = para_bounds(raw, s)
-            print(f"  - {raw[s:b][:66]!r}")
+            print(f"  - {show(raw[s:b][:66])!r}")
         if len(going) > 3:
             print(f"  - …and {len(going) - 3} more")
     else:
@@ -1917,11 +1975,11 @@ def cmd_import(args):
         at = after_paragraph(raw, pe) if args.after else ps
         print(f"import {len(blocks)} paragraph(s) from {args.markdown} "
               f"{'after' if args.after else 'before'} @{ps}:")
-        print(f"  anchor: {raw[ps:pe][:70]!r}")
+        print(f"  anchor: {show(raw[ps:pe][:70])!r}")
     for style, listing, text, runs in blocks:
         tag = f"{style}/{listing}" if listing else style
         mark = f"  ({len(runs)} emphasis run(s))" if runs else ""
-        print(f"  [{tag:<16}] {text[:60]}{mark}")
+        print(f"  [{tag:<16}] {show(text[:60])}{mark}")
 
     if args.replace_section and len(going) > 3:
         sys.exit(

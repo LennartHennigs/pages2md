@@ -137,6 +137,21 @@ When filtering deleted characters out of a paragraph, advance the running offset
 paragraph's **original** width. Advancing by the shrunken length drifts every subsequent
 lookup — this quietly deleted tens of kilobytes of good text in an early version.
 
+### Character indices count UTF-16 code units
+
+Every attribute table indexes the text the way NSString does: in UTF-16 code units, not
+characters. An emoji or any other character outside the Basic Multilingual Plane is one
+Python character but two units, so each one shifts every later index by one. Measured
+on `tests/samples/emoji.pages` (Pages 15.4): with two emoji in front, the bold word, the
+heading and the comment sit at Python index 4/21/45 but at table index 6/23/49.
+
+Both tools therefore work on a *UTF-16 view* of the text (`pages2md.u16`): a string in
+which each astral character is spelled as its surrogate pair. Its `len()` and slices
+count exactly what the tables count, so no offset arithmetic needs converting. Text
+goes back through `from_u16` only to be shown or written. Offsets the tools print
+(`@123`) are in these units too, so they agree with Pages' tables and with each other.
+An edit whose boundary falls between the two halves of a pair is refused.
+
 ## How I Got This Wrong
 
 Worth recording, because the failure mode is specific to this format.
@@ -378,6 +393,11 @@ Text-box/margin-note storages key comments differently again: an index-keyed run
 table (field 23) instead of the body's range-keyed one (field 25), closed by the next
 entry rather than by an explicit length. Same comment archives, different table shape —
 worth checking for whenever a "simple" field turns out to vary by storage.
+
+The split is not by storage either. In `tests/samples/emoji.pages` (Pages 15.4) the
+**body** keys its comments run-length in field 23 and has no field 25. In
+`kitchen-sink.pages`, saved by the same version, the body uses field 25. Readers and
+writers have to go by which field is present, never by which storage they are in.
 
 ### The body flow is not the document
 

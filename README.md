@@ -553,6 +553,8 @@ open an issue if you can reproduce or root-cause it.
   into the body text it would not be updated; no evidence of one was found, but it cannot
   be ruled out — which is why the snapshot happens *before* the write.
 - Body text split across multiple internal chunks is rejected rather than guessed at.
+- Offsets (`@123`, `--at`, page bounds) count UTF-16 code units, as Pages does: an emoji
+  counts as two. A match that would cut an emoji in half is refused.
 - `pages2md.py` reads the largest text storage, which is the body. Short documents whose
   longest text lives in a text box are not handled.
 

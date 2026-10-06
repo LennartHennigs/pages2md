@@ -10,7 +10,8 @@ same zip → IWA → archive → storage path as a real document.
 | --- | --- |
 | `test_codec.py` | varint, protobuf, Snappy, IWA chunking and archive framing round-trips |
 | `test_format.py` | review finding 1.5: `format` produces one clean run, `--plain`, new tables, no re-parse |
-| `test_edit_tables.py` | review findings 1.1–1.4: runs carried across paragraph deletion, inserted text isolated from preceding runs, empty tracked-change spans, comment ranges clamped |
+| `test_edit_tables.py` | review findings 1.1–1.4: runs carried across paragraph deletion, inserted text isolated from preceding runs, empty tracked-change spans, comment ranges clamped; minimal direct replacements |
+| `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 
 ## Planned
 
@@ -20,27 +21,29 @@ and the assertion that fails on today's code. **F** = needs a small fixture exte
 
 ### Fixture extensions needed first
 
-- `write_pages(..., extra=[(id, type, body)])` for additional archives: comment +
-  comment-ref + author, attachment → second storage (margin note), character-style
-  archives with properties, paragraph-style archives with names.
+- `write_pages(..., extra=[(id, type, body)])` exists (used for character styles);
+  still needed: comment + comment-ref + author, attachment → second storage (margin
+  note), paragraph-style archives with names.
 - A `storage_with_comments(text, [(start, len, text)])` helper that builds the whole
   comment chain, so reader and editor tests share one setup.
 - A fake `osascript` on `PATH` (a shell script printing a fixed reply) for the
   Pages-guard and index tests, so they run on Linux CI.
 
-### 1.6 UTF-16 offsets (needs a real Pages sample first)
+### Found in the samples
 
-- `test_samples.py` is written and skips until `tests/samples/emoji.pages` exists
-  (recipe in `tests/samples/README.md`). If it reports UTF-16: add index maps
-  between UTF-16 units and Python indices at the table boundary, then test reading
-  styles and replacing text after an emoji.
+| Test | Setup → assertion |
+| --- | --- |
+| **S** `test_footnote_marker_does_not_split_paragraph` | kitchen-sink: the footnote reference is `\x0e`, which `PARA_BREAKS` treats as a section break, so "What about a footnote" and "?" render as two paragraphs → one paragraph |
+| **S** `test_footnote_is_not_a_margin_note` | kitchen-sink: the footnote storage (attachment at 127) is labelled `note1` and rendered as a `>` quote → identified and rendered as a footnote |
+
+**S** = runs against a sample in `tests/samples/`.
 
 ### 2 Other bugs
 
 | Test | Setup → assertion |
 | --- | --- |
 | **F** `test_find_in_caption_with_page_index` | doc with an unanchored storage + a `.pages-index.json` → `cmd_find` prints a match, no `TypeError` |
-| **F** `test_locate_comment_in_note_when_body_has_comments` | body comment + note comment → `locate_comment(--on <note text>)` finds the note's |
+| **S** `test_locate_comment_in_note_when_body_has_comments` | kitchen-sink has exactly this: body comment + note comment → `locate_comment(--on <note text>)` finds the note's |
 | **F** `test_scope_excludes_unanchored_storages` | `--in` section → matches in captions are excluded; `--comments --in` same |
 | **R** `test_zero_width_match_at_end_maps_to_raw_length` | raw with a tracked deletion; regex `$\Z` → raw offset `len(raw)` |
 | **F** `test_pages_has_open_without_osascript` | `PATH` without osascript → returns False (or a clear message), no `FileNotFoundError` |

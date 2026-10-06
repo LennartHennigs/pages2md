@@ -1,16 +1,21 @@
-"""Checks against real documents written by Pages (tests/samples/).
+"""Checks against real documents written by Pages 15.4 (tests/samples/).
 
-Skipped when the sample is missing. See tests/samples/README.md for what each
-sample must contain.
+Skipped when a sample is missing. tests/samples/README.md says what each one
+contains. Edits always run on a temporary copy.
 """
-import os, sys, unittest
+import io, os, shutil, sys, tempfile, unittest, zipfile
+from contextlib import redirect_stdout
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+import iwa_codec as C
 import pages2md as P
+import pages_edit as E
 
 SAMPLES = os.path.join(HERE, "samples")
 EMOJI = os.path.join(SAMPLES, "emoji.pages")
+KITCHEN = os.path.join(SAMPLES, "kitchen-sink.pages")
 
 
 def utf16_index(text, i):
@@ -18,13 +23,37 @@ def utf16_index(text, i):
     return len(text[:i].encode("utf-16-le")) // 2
 
 
+def markdown(path, *args):
+    out = io.StringIO()
+    with redirect_stdout(out):
+        P.main([*args, path])
+    return out.getvalue()
+
+
+class CopyCase(unittest.TestCase):
+    SAMPLE = None
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, os.path.basename(self.SAMPLE))
+        shutil.copy(self.SAMPLE, self.path)
+
+    def edit(self, *args):
+        """Run pages_edit on the copy, writing, with Pages assumed closed."""
+        out = io.StringIO()
+        with mock.patch.object(E, "pages_has_open", return_value=False), \
+                redirect_stdout(out):
+            E.main([*args, "--write", "--no-backup", self.path])
+        return out.getvalue()
+
+
 @unittest.skipUnless(os.path.exists(EMOJI), "tests/samples/emoji.pages not present")
 class OffsetUnits(unittest.TestCase):
-    """Review finding 1.6: are table indices code points or UTF-16 units?
+    """Review finding 1.6, settled: Pages' tables count UTF-16 code units.
 
-    The sample puts two emoji (each one code point, two UTF-16 units) before
-    a bold word, a heading and a comment, so the two conventions disagree by
-    exactly 2 at each of them.
+    Two emoji (one code point, two UTF-16 units each) sit before a bold word,
+    a heading and a comment, so the conventions disagree at each of them.
     """
 
     @classmethod
@@ -32,36 +61,131 @@ class OffsetUnits(unittest.TestCase):
         cls.doc = P.PagesDoc(EMOJI)
         cls.raw = cls.doc._raw_text()
         f = cls.doc._body()
-        cls.char = cls.doc._table(f, P.F_CHAR_TBL)
-        cls.para = cls.doc._styles(f, P.F_PARA_TBL)
+        cls.char = {i for i, r in cls.doc._table(f, P.F_CHAR_TBL) if r}
+        cls.para = {i for i, _r in cls.doc._styles(f, P.F_PARA_TBL)}
 
-    def units_for(self, needle, indices):
+    def assert_utf16(self, needle, indices):
         i = self.raw.find(needle)
         self.assertGreater(i, 0, f"sample text lacks {needle!r}")
         u = utf16_index(self.raw, i)
         self.assertNotEqual(i, u, "sample has no astral character before it")
-        if i in indices:
-            return "code points"
-        if u in indices:
-            return "UTF-16"
-        self.fail(f"no table entry at {i} (code points) or {u} (UTF-16) "
-                  f"for {needle!r}; entries: {sorted(indices)}")
+        self.assertIn(u, indices)
+        self.assertNotIn(i, indices)
 
-    def test_character_styles(self):
-        unit = self.units_for("Bold", {i for i, r in self.char if r})
-        self.assertEqual(unit, "code points", "1.6 CONFIRMED: character "
-                         "style indices are UTF-16 code units")
+    def test_character_styles_count_utf16(self):
+        self.assert_utf16("Bold", self.char)
 
-    def test_paragraph_styles(self):
-        unit = self.units_for("Heading after emoji", {i for i, _r in self.para})
-        self.assertEqual(unit, "code points", "1.6 CONFIRMED: paragraph "
-                         "style indices are UTF-16 code units")
+    def test_paragraph_styles_count_utf16(self):
+        self.assert_utf16("Heading after emoji", self.para)
 
-    def test_comment_ranges(self):
-        starts = {c["start"] for c in self.doc.comments()}
-        unit = self.units_for("commented", starts)
-        self.assertEqual(unit, "code points", "1.6 CONFIRMED: comment "
-                         "ranges are UTF-16 code units")
+    def test_comment_ranges_count_utf16(self):
+        self.assert_utf16("Commented", {c["start"] for c in self.doc.comments()})
+
+
+@unittest.skipUnless(os.path.exists(EMOJI), "tests/samples/emoji.pages not present")
+class ReadingAfterEmoji(unittest.TestCase):
+    def test_markdown(self):
+        self.assertEqual(markdown(EMOJI),
+                         "😀😀 **Bold** word here.\n\n"
+                         "# Heading after emoji\n\n"
+                         "😀😀 Commented word here.\n")
+
+    def test_comment_quotes_the_commented_word(self):
+        (c,) = P.PagesDoc(EMOJI).comments()
+        self.assertEqual(c["quote"], "Commented")
+
+    def test_runs_index_the_returned_text(self):
+        para = P.PagesDoc(EMOJI).paragraphs()[0]
+        (a, b, bold, _i, _u), = para["runs"]
+        self.assertEqual((para["raw"][a:b], bold), ("Bold", True))
+
+    def test_offsets_are_in_pages_units(self):
+        offsets = [p["offset"] for p in P.PagesDoc(EMOJI).paragraphs()]
+        self.assertEqual(offsets, [0, 23, 43])
+
+    def test_fingerprints_agree(self):
+        self.assertEqual(P.text_fingerprint(EMOJI), E.fingerprint(E.Document(EMOJI)))
+
+
+@unittest.skipUnless(os.path.exists(EMOJI), "tests/samples/emoji.pages not present")
+class EditingAfterEmoji(CopyCase):
+    SAMPLE = EMOJI
+
+    def test_replace_keeps_bold_on_the_new_word(self):
+        self.edit("replace", "-f", "Bold", "-r", "Strong")
+        self.assertTrue(markdown(self.path).startswith("😀😀 **Strong** word here."))
+
+    def test_replace_keeps_comment_on_its_word(self):
+        self.edit("replace", "-f", "word here.", "-r", "words.", "--all")
+        (c,) = P.PagesDoc(self.path).comments()
+        self.assertEqual(c["quote"], "Commented")
+        self.assertIn("😀😀 **Bold** words.", markdown(self.path))
+
+    def test_replace_an_emoji(self):
+        self.edit("replace", "-f", "😀😀 Bold", "-r", "🎉 Bold")
+        md = markdown(self.path)
+        self.assertTrue(md.startswith("🎉 **Bold** word here."), md)
+        (c,) = P.PagesDoc(self.path).comments()
+        self.assertEqual(c["quote"], "Commented")
+
+    def test_insert_with_emoji_keeps_following_styles(self):
+        self.edit("insert", "--after", "Bold word", "--text", "New 🚀 paragraph",
+                  "--style", "Body 1")
+        self.assertEqual(markdown(self.path),
+                         "😀😀 **Bold** word here.\n\nNew 🚀 paragraph\n\n"
+                         "# Heading after emoji\n\n😀😀 Commented word here.\n")
+
+    def test_format_after_emoji(self):
+        self.edit("format", "--on", "Commented", "--bold")
+        self.assertIn("😀😀 **Commented** word here.", markdown(self.path))
+
+    def test_match_splitting_an_emoji_is_refused(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.edit("replace", "-f", ".(?= Bold)", "-r", "x", "--regex")
+        self.assertIn("emoji", str(cm.exception))
+
+    def test_find_shows_real_characters(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            E.main(["find", "Bold", self.path])
+        self.assertIn("😀😀 [Bold] word", out.getvalue())
+
+
+@unittest.skipUnless(os.path.exists(KITCHEN), "tests/samples/kitchen-sink.pages not present")
+class KitchenSink(unittest.TestCase):
+    def test_codec_round_trips_every_iwa(self):
+        with zipfile.ZipFile(KITCHEN) as z:
+            for n in (n for n in z.namelist() if n.endswith(".iwa")):
+                p = C.iwa_decode(z.read(n))
+                self.assertEqual(C.pack_archives(C.archives(p)), p, n)
+                self.assertEqual(C.iwa_decode(C.iwa_encode(p)), p, n)
+
+    def test_every_format_renders(self):
+        for fmt in sorted(P.RENDERERS):
+            for changes in ("accept", "reject", "mark"):
+                self.assertTrue(markdown(KITCHEN, "-t", fmt, "--changes", changes))
+
+    def test_headings_and_lists(self):
+        md = markdown(KITCHEN)
+        for line in ("# Heading 1", "## Heading 2", "### Heading 3",
+                     "- A bulleted", "- A numbered one"):
+            self.assertIn(line + "\n", md)
+
+    def test_tracked_changes(self):
+        self.assertIn("This is an insert", markdown(KITCHEN))
+        self.assertNotIn("This is an insert", markdown(KITCHEN, "--changes", "reject"))
+        self.assertIn("## Heading~~ 2~~", markdown(KITCHEN, "--changes", "mark"))
+
+    def test_comments_in_body_and_note(self):
+        # Pages stores this comment's text with a trailing newline
+        rows = [(c["handle"], c["quote"], [m["text"].strip() for m in c["thread"]])
+                for c in P.PagesDoc(KITCHEN).comments()]
+        self.assertEqual(rows, [("body", "Body", ["Love this", "thx!"]),
+                                ("note1", "about", ["footnote comment"])])
+
+    def test_fingerprints_agree(self):
+        self.assertEqual(P.text_fingerprint(KITCHEN),
+                         E.fingerprint(E.Document(KITCHEN)))
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ class DocCase(unittest.TestCase):
         fields = {F_PARA_TBL: table([(0, 1)])}
         names = {"para": F_PARA_TBL, "lists": F_LIST_TBL, "char": F_CHAR_TBL,
                  "ins": F_INSERTIONS, "dels": F_DELETIONS,
-                 "comments": F_COMMENTS}
+                 "comments": F_COMMENTS, "comment_runs": E.F_COMMENTS_RUN}
         fields.update({names[k]: v for k, v in tables.items()})
         path = write_pages(os.path.join(self.tmp.name, "t.pages"), text, fields)
         return E.Document(path)
@@ -72,6 +72,13 @@ class DeleteParagraphKeepsRuns(DocCase):
         # and the accepted view therefore still shows C (the deleted span
         # took A's newline with it, which is what it covered before)
         self.assertEqual(doc.accepted_map()[0], "AACCCC\n")
+
+    def test_run_length_comment_does_not_spread(self):
+        # body comments keyed run-length (field 23), as Pages 15.4 writes them
+        doc = self.doc(THREE, comment_runs=table([(0, None), (2, COMMENT),
+                                                  (7, None)]))
+        doc.delete_paragraph(5)
+        self.assertEqual(doc.comment_table(), [(2, 3, COMMENT)])
 
     def test_following_bullet_keeps_its_list_style(self):
         # B and C are bullets; C inherits through a null "no change" entry
@@ -265,6 +272,30 @@ class CommentRangesAreClamped(DocCase):
         doc = self.doc(THREE, comments=comment_table([(2, 5, COMMENT)]))
         doc.delete_paragraph(5)
         self.assertEqual(ranges(doc), [(2, 3, COMMENT)])
+
+
+class MinimalEdit(DocCase):
+    """Direct replacement only rewrites what changes, so runs inside the
+    shared part stay on their characters."""
+
+    def test_shared_ends_are_trimmed(self):
+        self.assertEqual(E.minimal_edit("xx Bold!", 0, 7, "x Bold"), (1, 2, ""))
+        self.assertEqual(E.minimal_edit("colour", 0, 6, "color"), (4, 5, ""))
+        self.assertEqual(E.minimal_edit("abc", 0, 3, "xyz"), (0, 3, "xyz"))
+        self.assertEqual(E.minimal_edit("same", 0, 4, "same"), (4, 4, ""))
+
+    def test_never_splits_a_surrogate_pair(self):
+        # 😀 and 😃 share their first UTF-16 half
+        old, new = E.u16("a😀b"), E.u16("a😃b")
+        start, end, rep = E.minimal_edit(old, 0, len(old), new)
+        self.assertEqual((start, end), (1, 3))
+        self.assertEqual(E.from_u16(rep), "😃")
+
+    def test_bold_stays_on_its_word(self):
+        doc = self.doc("xx Bold.\n", char=table([(0, None), (3, BOLD), (7, None)]))
+        doc.apply([(0, 7, "x Bold")])
+        self.assertEqual(doc.text()[0], "x Bold.\n")
+        self.assertEqual(rows(doc, F_CHAR_TBL), [(0, None), (2, BOLD), (6, None)])
 
 
 if __name__ == "__main__":

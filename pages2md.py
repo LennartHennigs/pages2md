@@ -68,6 +68,56 @@ def _ref(buf):
     return read_varint(buf, 1)[0]
 
 
+# ------------------------------------------------------------ UTF-16 offsets
+# Pages counts characters the way NSString does: in UTF-16 code units. Every
+# attribute table -- paragraph and character styles, comments, tracked
+# changes, attachments -- indexes the text that way, so an emoji (one Python
+# character, two UTF-16 units) shifts every later index by one. Verified
+# against tests/samples/emoji.pages (Pages 15.4).
+#
+# Both tools therefore work on a *UTF-16 view* of the text: a str in which
+# each astral character is spelled as its surrogate pair. len() and slicing
+# of the view count exactly what the tables count, so offset arithmetic
+# needs no conversion anywhere. Text is converted back with from_u16 only to
+# show it or to write it.
+_ASTRAL = re.compile("[\U00010000-\U0010FFFF]")
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _pair(m):
+    n = ord(m.group()) - 0x10000
+    return chr(0xD800 + (n >> 10)) + chr(0xDC00 + (n & 0x3FF))
+
+
+def u16(s):
+    """The UTF-16 view of `s` (idempotent: a view maps to itself)."""
+    return _ASTRAL.sub(_pair, s)
+
+
+def from_u16(s, errors="strict"):
+    """Real text from a UTF-16 view; errors="replace" for display."""
+    if not _SURROGATE.search(s):
+        return s
+    return s.encode("utf-16-le", "surrogatepass").decode("utf-16-le", errors)
+
+
+def show(s):
+    """A view slice made printable -- a slice may cut an emoji in half."""
+    return from_u16(s, "replace")
+
+
+def u16_index_map(view):
+    """[index in from_u16(view, "replace") for each view index, plus the end]."""
+    out, idx = [], 0
+    for k, c in enumerate(view):
+        out.append(idx)
+        if not ("\ud800" <= c <= "\udbff"
+                and "\udc00" <= view[k + 1:k + 2] <= "\udfff"):
+            idx += 1
+    out.append(idx)
+    return out
+
+
 class PagesDoc:
     def __init__(self, path):
         self.path = path
@@ -194,7 +244,7 @@ class PagesDoc:
             if thread:
                 out.append({"handle": handle, "anchor": anchor,
                             "start": idx, "end": end,
-                            "quote": _clean(raw[idx:end], False),
+                            "quote": _clean(show(raw[idx:end]), False),
                             "thread": thread})
         return out
 
@@ -220,7 +270,7 @@ class PagesDoc:
         them by character index in field 23, run-length, closed by the next
         entry. Same comment archives either way.
         """
-        raw = b"".join(f.get(F_TEXT, [])).decode("utf-8", "replace")
+        raw = u16(b"".join(f.get(F_TEXT, [])).decode("utf-8", "replace"))
         if F_COMMENTS_RUN in f:
             return self._comment_runs(f, handle, anchor, raw)
         if F_COMMENTS not in f:
@@ -244,7 +294,7 @@ class PagesDoc:
             if thread:
                 out.append({"handle": handle, "anchor": anchor,
                             "start": start, "end": end,
-                            "quote": _clean(raw[start:end], False),
+                            "quote": _clean(show(raw[start:end]), False),
                             "thread": thread})
         return out
 
@@ -364,7 +414,9 @@ class PagesDoc:
 
     def paragraphs(self, changes="accept", fields=None):
         f = fields if fields is not None else self._body()
-        text = b"".join(f.get(F_TEXT, [])).decode("utf-8", "replace")
+        # the UTF-16 view, so positions line up with the tables; each
+        # paragraph's raw text and run offsets are converted back below
+        text = u16(b"".join(f.get(F_TEXT, [])).decode("utf-8", "replace"))
         # These tables are run-length maps, but a null entry (field 2 absent)
         # does NOT mean the same thing in each -- determined empirically:
         #   paragraph + list styles: null = "no change here", so the current
@@ -436,6 +488,13 @@ class PagesDoc:
                 for a, b in marks[lo:hi] if lo <= hi else []:
                     if b > pos and a < pos + width:
                         struck.append((max(a, pos) - pos, min(b, pos + width) - pos))
+            if _SURROGATE.search(raw):
+                # `offset` stays in document (UTF-16) units; offsets *within*
+                # the paragraph follow its text back to real characters
+                m = u16_index_map(raw)
+                runs = [(m[a], m[b], *rest) for a, b, *rest in runs]
+                struck = [(m[a], m[b]) for a, b in struck]
+                raw = show(raw)
             out.append(dict(offset=pos, raw=raw, style=name, struck=struck,
                             list=(bullet or "").split("liststyle-")[-1] or None,
                             semantic=(semantic or "").split("paragraphstyle-")[-1],
@@ -702,7 +761,7 @@ def build_index(doc, raw):
     pos, bounds = 0, []
     for text in pages:
         bounds.append(pos)
-        for ch in text:
+        for ch in u16(text):            # compare like with like
             if not significant(ch):
                 continue
             mark = pos
@@ -938,10 +997,10 @@ def main(argv=None):
         ap.error("use --in or --page, not both")
     if args.in_section:
         label, lo, hi = section_range(args.file, args.in_section,
-                                      len(doc._raw_text()))
+                                      len(u16(doc._raw_text())))
         label = f"section {label!r}"
     elif args.page:
-        lo, hi = page_range(args.file, args.page, len(doc._raw_text()))
+        lo, hi = page_range(args.file, args.page, len(u16(doc._raw_text())))
         label = f"page {args.page}"
     doc._scope = (lo, hi) if label else None
     if label:

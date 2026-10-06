@@ -13,7 +13,7 @@ For every sample:
   author name.
 - Write down your Pages version in the commit message.
 
-## `emoji.pages` — offset units (review finding 1.6)
+## `emoji.pages` — offset units (review finding 1.6; result: UTF-16)
 
 Exactly this, in the body. `😀` is one character to Python but two UTF-16 units, so
 each checked offset differs by 2 between the two conventions.
@@ -27,10 +27,13 @@ each checked offset differs by 2 between the two conventions.
 `python3 -m unittest tests.test_samples` then says whether each table counts code
 points or UTF-16 units.
 
-## Later: `kitchen-sink.pages`
+## `kitchen-sink.pages`
 
-For the rest of `tests/PLAN.md`: headings 1–3, a bulleted and a numbered list, a margin
-note with a comment, a text box with text and a comment, a figure caption, a generated
-table of contents, one tracked insertion and one tracked deletion (Edit ▸ Track
-Changes), and one section of at least 12 paragraphs mixing body text, bullets and bold
-runs that cross paragraph breaks, for testing batch deletion.
+Saved by Pages 15.4. Contains headings 1–3, a bulleted and a numbered list, a footnote
+with a comment, a body comment with a reply, one tracked insertion and one tracked
+deletion, and a long run of body paragraphs, bullets and headings.
+
+Still wanted, in a later sample: a text box with text and a comment, a figure caption,
+a generated table of contents, and bold runs that cross paragraph breaks. For the
+batch-deletion test, also a copy edited with `import --replace-section` that has been
+opened and saved by Pages.
