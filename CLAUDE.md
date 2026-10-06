@@ -27,6 +27,7 @@ python3 -m unittest tests.test_footnotes       # one module
 python3 pages2md.py tests/samples/formatting.pages            # render a sample
 python3 pages_edit.py find "text" tests/samples/formatting.pages
 python3 tests/anonymize_author.py in.pages out.pages "Real Name" "Sample Author"
+python3 tests/pages_roundtrip.py all /tmp/rt   # macOS + Pages only: does Pages accept our writes?
 ```
 
 `osascript` does not exist off macOS. `pages_has_open` returns False there, and tests that
@@ -60,7 +61,9 @@ drive `pages_edit.main` patch it (`mock.patch.object(E, "pages_has_open", return
    and the style lookups each exist once, in `pages2md.py`. A second copy is how the
    reader and the editor came to disagree before.
 8. **Never claim Pages accepts a write that only the tests have seen.** The README and
-   `insights.md` ("Still unproven") say what has and has not been opened in Pages. Do not
+   `insights.md` ("Still unproven") say what has and has not been opened in Pages;
+   `tests/pages_roundtrip.py` is how it gets checked (add a case there for every new kind
+   of write, and run it on a Mac before saying a write path is safe). Do not
    raise the three-paragraph limit on `import --replace-section`, and do not call
    `clear_range` from new code, until a real Pages round-trip shows the batch-deletion
    corruption is gone.

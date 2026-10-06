@@ -49,6 +49,12 @@ Add each change here in the same commit that makes it.
 - `CLAUDE.md`: working notes for the repository (architecture, the UTF-16 offset
   convention, the run-length rule for structural edits, how to find out what a field
   means, sample privacy, the changelog rule).
+- `tests/pages_roundtrip.py`: a harness for macOS that has Pages open and re-save a copy of
+  each sample after each kind of write (22 cases including deleting 1, 3, 9 and 12
+  paragraphs and an unedited control per sample), then compares what is read back and
+  Pages' page counts. Stages `prepare`, `run`, `check` and `all`, with a manual route for
+  `run`; writes `report.md`. Tested with a stand-in for Pages; not yet run against the real
+  application.
 - This changelog.
 
 ### Changed

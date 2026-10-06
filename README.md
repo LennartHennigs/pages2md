@@ -657,6 +657,24 @@ to write and `tests/samples/README.md` the real documents they run against):
 python3 -m unittest discover -s tests
 ```
 
+Then, on a Mac with Pages, the round-trip harness, which is the check that settles whether
+Pages accepts what the editor writes (see `tests/pages_roundtrip.py`):
+
+```bash
+python3 tests/pages_roundtrip.py all /tmp/roundtrip     # ~22 cases, a minute or two
+```
+
+It copies the sample documents, applies each kind of write to a copy (replace, tracked
+replace, insert, import, retag, format, comments, footnote and emoji edits, deleting 1, 3,
+9 and 12 paragraphs), has Pages open each copy and *save it as a new file*, and compares what
+`pages2md.py` reads back — Markdown with changes accepted and marked, headings, paragraph
+styles, comments — with what was written. Pages' own page count must not grow after a case
+that only deletes. Every sample also has an unedited control, so what Pages itself
+normalises is not mistaken for damage. It writes `report.md`; paste that back if anything
+fails. Without Pages, `prepare` and `check` support doing the opening and saving by hand.
+**It has not yet been run against a real Pages**, so treat its first report as a test of
+the harness too.
+
 Then three checks against a real document, in increasing order of authority:
 
 ```bash

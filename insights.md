@@ -600,8 +600,8 @@ With the setting off, a plain `.bak` is written instead. Both belong in `.gitign
 
 - **No write from the work in the changelog's *Unreleased* section has been opened in
   Pages.** The unit tests and the real sample documents check what the tools read back,
-  not what Pages accepts. The first thing to do with a real document is edit a copy, open
-  it in Pages, save, and re-read.
+  not what Pages accepts. `tests/pages_roundtrip.py` exists to settle it (edit a copy, have
+  Pages save it, re-read, compare, per kind of write); it has not been run on a Mac yet.
 - Headers and footers are not reached. Comments cannot be written inside a text box.
 - Indices are shifted only within the edited storage; if another archive elsewhere holds
   offsets into the body text, it would not be updated. No evidence of one was found, but

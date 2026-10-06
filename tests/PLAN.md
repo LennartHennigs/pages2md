@@ -16,6 +16,7 @@ same zip → IWA → archive → storage path as a real document.
 | `test_footnotes.py` (`FootnotesAsMarkdown`) | `[^n]` references and definitions: order, multi-paragraph, skip/only, tracked deletion, JSON, plain |
 | `test_markdown_fidelity.py` | hyperlinks (offsets, emoji, deletion, emphasis nesting, URL quoting), tight, numbered and nested lists, restarts, strikethrough, escaping table |
 | `test_edit_tables.py` (`DeleteParagraphKeepsListLevels`) | list levels survive paragraph deletion; insertion is a sibling |
+| `test_roundtrip_harness.py` | the Pages round-trip harness against a stand-in Pages: all cases prepared and readable, identity passes, a lost edit / lost headings / missing file / timeout / growing page count are caught |
 | `test_guard.py` | the Pages-open guard does not crash without `osascript` |
 | `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 
@@ -34,6 +35,14 @@ and the assertion that fails on today's code. **F** = needs a small fixture exte
   comment chain, so reader and editor tests share one setup.
 - A fake `osascript` on `PATH` (a shell script printing a fixed reply) for the
   Pages-guard and index tests, so they run on Linux CI.
+
+### Waiting for a real Pages
+
+Run `python3 tests/pages_roundtrip.py all DIR` on a Mac and read `report.md`. Until that
+has been done, nothing the editor writes is known to be accepted by Pages. The first run
+also tests the harness: the AppleScript (`open`, `save ... in`, `close`) has only been
+exercised with a stand-in, and the controls may show normalisations by Pages that the
+comparison needs to allow for.
 
 ### Waiting for `tests/samples/fidelity.pages`
 
