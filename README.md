@@ -67,7 +67,8 @@ pages2md.py -t json report.pages
   below.
 - **plain** — text only, no markup.
 - **json** — one object per paragraph: `offset`, `text`, `style`, `semantic`, `list`,
-  `list_kind`, the character `runs`, `links`, and the footnote fields. Use this when you want to do your own analysis; the offsets
+  `list_kind`, `list_level`, the character `runs` (`[start, end, bold, italic,
+  underline, strikethrough]`), `links`, and the footnote fields. Use this when you want to do your own analysis; the offsets
   are what `pages_edit.py` works in.
 - **outline** — the heading tree with character offsets and page numbers.
 - **comments** — review comments with the text they are attached to.
@@ -88,9 +89,11 @@ pages2md.py -t json report.pages
   starting over after any other paragraph or where Pages restarts the list. Which kind a
   style is comes from the style's label type, not its name, so renamed and localised
   list styles work. Letters and Roman numerals are not kept (Markdown has none).
-  Nested levels are not read yet — see *Not considered yet*.
-- **Emphasis** — `**bold**`, `*italic*`, `***both***`. Underline has no Markdown form and
-  is dropped. Whitespace stays outside the markers, and where emphasis and a link only
+  Nested levels are kept: a child is indented under its parent (two spaces under `-`,
+  three under `1.`), and each new sub-list counts from 1 again.
+- **Emphasis** — `**bold**`, `*italic*`, `***both***`, and `~~strikethrough~~` (character
+  formatting and tracked deletions alike, so overlapping spans become one). Underline has
+  no Markdown form and is dropped. Whitespace stays outside the markers, and where emphasis and a link only
   partly overlap, the emphasis is cut at the link's edge so the markup nests.
 - **Escaping** — text that would turn into markup is escaped: `*`, `` ` ``, `[`, `]`, `\`,
   a line that begins like a heading, quote, bullet, number or rule (`1\.`), `<tag>`,
@@ -588,8 +591,7 @@ unverified unless stated. Each one that needs a sample is listed in
 | --- | --- |
 | **Images** | The object-anchor character is dropped, so an image should leave no trace in the Markdown (never seen with a real image). Nothing is extracted from `Data/`, and there is no alt text or caption link. |
 | **Tables** | The table's cell text lives in its own storages and is not placed in the flow; expect it to be missing from `markdown`/`plain` (it may show up in `-t storages`). No Markdown table is built. |
-| **Nested lists** | Every list item is read as level one. The paragraph's list level has not been located in the file. |
-| **List details** | Start-at values, "continue numbering from the previous list", custom number formats (letters, Roman numerals) and bullet characters are not read. |
+| **List details** | Start-at values, "continue numbering from the previous list", custom number formats (letters, Roman numerals) and bullet characters are not read. Numbered lists nested under bullets (and the reverse) work in the tests but have not been seen in a real document. |
 | **Shapes, text boxes and floating objects** | A text box's text is a separate storage: listed by `-t storages` and searchable by `pages_edit.py find`, but not placed in the Markdown. Shapes, lines and charts are not read. |
 | **Headers, footers, page numbers** | Not read. |
 | **Page layout documents** | Documents made from the *Page Layout* templates have no single text flow; only the largest storage is read. |
@@ -597,13 +599,13 @@ unverified unless stated. Each one that needs a sample is listed in
 | **Table of contents** | Listed by `-t storages` but left out of the Markdown, since Pages regenerates it. |
 | **Endnotes** | Probably read like footnotes, but untested. |
 | **Cross-references, bookmarks, citations, index entries** | Not read. Only external hyperlinks are. Links stored outside the smart-field table (for example on an image) are not seen. |
-| **Character formatting beyond bold/italic** | Underline, strikethrough, super- and subscript, colour, highlight, font and size are dropped. Monospace text is not turned into code spans. |
+| **Character formatting beyond bold, italic and strikethrough** | Underline, super- and subscript, colour, highlight, font and size are dropped. Monospace text is not turned into code spans. |
 | **Paragraph formatting** | Alignment, indents, spacing, borders and shading are dropped. Styles other than headings and Title/Subtitle (Quote, Caption, Block Quote, custom styles) are rendered as plain paragraphs. |
 | **Equations and math** | Not read. |
 | **Media, forms, review marks other than comments and tracked changes** | Not read. |
 | **Right-to-left and mixed-direction text** | Read in storage order; direction attributes are ignored. |
 | **Document properties** | Title, author, language and template are not exported. |
-| **Writing the above** | `pages_edit.py` edits text, its styles and its comments only. It does not create or modify images, tables, links, or list levels. |
+| **Writing the above** | `pages_edit.py` edits text, its styles and its comments only. It does not create or modify images, tables or links, and it cannot set a list level (`import` writes level 0). Deleting a paragraph keeps the levels of the items after it; it does not carry list *restart* flags, so deleting the first item of a numbered list may leave the next one without its restart. |
 | **Older and unusual files** | Pages '09 (XML) documents, folder-style `.pages` packages and password-protected files are not supported. |
 
 ## Caveats

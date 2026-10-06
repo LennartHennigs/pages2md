@@ -43,14 +43,20 @@ def change(kind):
                  (4, 2, b"00000000-0000-0000-0000-000000000000")])
 
 
-def char_style(bold=False, italic=False):
-    """A character-style archive that sets only weight and slant."""
+def char_style(bold=False, italic=False, underline=False, strike=False):
+    """A character-style archive with the given flags set (and nothing else)."""
     props = []
-    if bold:
-        props.append((P_BOLD, 0, write_varint(1)))
-    if italic:
-        props.append((P_ITALIC, 0, write_varint(1)))
+    for on, field in ((bold, P_BOLD), (italic, P_ITALIC),
+                      (underline, 11), (strike, 12)):
+        if on:
+            props.append((field, 0, write_varint(1)))
     return emit([(F_PROPS, 2, emit(props))])
+
+
+def para_levels(rows):
+    """The list-level table (field 6) from [(index, level)]."""
+    return emit([(1, 2, emit([(1, 0, write_varint(i)), (2, 0, write_varint(lv)),
+                              (3, 0, write_varint(0))])) for i, lv in rows])
 
 
 def list_style(kind, label):

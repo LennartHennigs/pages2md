@@ -60,7 +60,11 @@ C_TEXT, C_DATE, C_AUTHOR, C_NEXT = 1, 2, 3, 4   # inside a comment archive
 APPLE_EPOCH = 978307200       # 2001-01-01, Core Foundation absolute time
 F_NAME, F_IDENT, F_PARENT = 1, 2, 3          # inside the nested TSS.StyleArchive
 F_PROPS = 11                                  # style properties
-P_BOLD, P_ITALIC, P_FONT, P_UNDERLINE = 1, 2, 5, 10
+# Character-style properties. 11 and 12 are the ones Pages' own "Underline" and
+# "Strikethrough" styles set (checked against its built-in styles and a
+# rendered preview); 10 is only ever set on a footnote reference.
+P_BOLD, P_ITALIC, P_FONT, P_BASELINE, P_UNDERLINE, P_STRIKE = 1, 2, 5, 10, 11, 12
+F_LEVELS = 6                  # list level, run-length: entry {index, level, 0}
 
 CONTROL = {"\x04": "", "\x05": "", "\x0e": "", "￼": ""}
 LINE_SEP = " "
@@ -154,10 +158,10 @@ class PagesDoc:
         return res
 
     def char_format(self, ref):
-        """(bold, italic, underline) for a character style."""
+        """(bold, italic, underline, strikethrough) for a character style."""
         if ref in self._fmt:
             return self._fmt[ref]
-        res = (False, False, False)
+        res = (False, False, False, False)
         m = self.arcs.get(ref, (None, None, None))[1]
         if m:
             props = parse_fields(m).get(F_PROPS, [None])[0]
@@ -167,7 +171,7 @@ class PagesDoc:
                 font = p[P_FONT][0].decode("utf-8", "replace") if P_FONT in p else ""
                 res = (flag(P_BOLD) or "bold" in font.lower(),
                        flag(P_ITALIC) or "italic" in font.lower() or "oblique" in font.lower(),
-                       flag(P_UNDERLINE))
+                       flag(P_UNDERLINE), flag(P_STRIKE))
         self._fmt[ref] = res
         return res
 
@@ -404,6 +408,21 @@ class PagesDoc:
         code = parse_fields(m).get(11, [0])[0]
         return {0: None, 3: "numbered"}.get(code, "bullet")
 
+    def _levels(self, f):
+        """[(offset, level)] from the list-level table (sorted, run-length).
+
+        Each entry holds until the next: in Pages' own sample, "This" is level
+        0, "Is" and "A bulleted" are level 1 (one entry covers both) and
+        "list" is level 2.
+        """
+        if F_LEVELS not in f:
+            return []
+        out = []
+        for e in parse_fields(f[F_LEVELS][0]).get(1, []):
+            ef = parse_fields(e)
+            out.append((ef.get(1, [0])[0], ef.get(2, [0])[0]))
+        return sorted(out)
+
     def _list_starts(self, f):
         """Paragraph offsets where a list restarts (para-starts `first` is 1)."""
         if F_PARA_STARTS not in f:
@@ -507,6 +526,8 @@ class PagesDoc:
         refs_here = self.inline_marks(f, text)
         links_all = self._links(f, text)
         list_starts = self._list_starts(f)
+        levels = self._levels(f)
+        lv_idx = [i for i, _ in levels]
         p_idx = [i for i, _ in para_tbl]
         c_idx = [i for i, _ in char_tbl]
 
@@ -529,10 +550,11 @@ class PagesDoc:
             while k < len(char_tbl) and char_tbl[k][0] < pos + len(raw):
                 start = max(char_tbl[k][0], pos)
                 end = char_tbl[k + 1][0] if k + 1 < len(char_tbl) else len(text)
-                b, i_, u = (self.char_format(char_tbl[k][1])
-                            if char_tbl[k][1] else (False, False, False))
-                if (b or i_ or u) and min(end, pos + len(raw)) > start:
-                    runs.append((start - pos, min(end, pos + len(raw)) - pos, b, i_, u))
+                b, i_, u, x = (self.char_format(char_tbl[k][1])
+                               if char_tbl[k][1] else (False,) * 4)
+                if (b or i_ or u or x) and min(end, pos + len(raw)) > start:
+                    runs.append((start - pos, min(end, pos + len(raw)) - pos,
+                                 b, i_, u, x))
                 k += 1
             links = [(max(a, pos) - pos, min(b, pos + len(raw)) - pos, url)
                      for a, b, url in links_all if b > pos and a < pos + len(raw)]
@@ -544,11 +566,11 @@ class PagesDoc:
                 remap[len(raw)] = len(keep)
                 raw = "".join(raw[k] for k in keep)
                 shifted = []
-                for s, e, b, i_, u in runs:
+                for s, e, *flags in runs:
                     ns = remap.get(s, bisect.bisect_left(keep, s))
                     ne = remap.get(e, bisect.bisect_left(keep, e))
                     if ne > ns:
-                        shifted.append((ns, ne, b, i_, u))
+                        shifted.append((ns, ne, *flags))
                 runs = shifted
                 moved = []
                 for s, e, url in links:
@@ -578,6 +600,9 @@ class PagesDoc:
                     if pos <= m < pos + width and m not in drop]
             out.append(dict(offset=pos, raw=raw, style=name, struck=struck,
                             refs=refs, links=links, list_kind=kind,
+                            list_level=(levels[bisect.bisect_right(lv_idx, pos) - 1][1]
+                                        if kind and levels
+                                        and bisect.bisect_right(lv_idx, pos) else 0),
                             list_start=pos in list_starts,
                             list=(bullet or "").split("liststyle-")[-1] or None,
                             semantic=(semantic or "").split("paragraphstyle-")[-1],
@@ -965,7 +990,7 @@ def _merged_marks(raw, runs):
     the same marker merge: "**foo****bar**" becomes "**foobar**".
     """
     out = []
-    for start, end, bold, italic, _u in sorted(runs):
+    for start, end, bold, italic, *_rest in sorted(runs):
         mark = "***" if bold and italic else "**" if bold else "*" if italic else ""
         if not mark or not _clean(raw[start:end].strip(), False):
             continue
@@ -1040,7 +1065,17 @@ def _annotate(raw, runs, struck=(), links=(), escape=False):
     markers still nest.
     """
     marks = []                          # (pos, rank, depth, text)
-    for a, b in struck:                 # rank: 0 close, 1 open, 2 escape
+    # struck text: tracked deletions and strikethrough formatting alike, so
+    # overlapping or touching spans become one ~~...~~
+    struck_spans = sorted([*struck, *((r[0], r[1]) for r in runs
+                                      if len(r) > 5 and r[5])])
+    merged = []
+    for a, b in struck_spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    for a, b in merged:                 # rank: 0 close, 1 open, 2 escape
         if raw[a:b].strip():
             marks += [(a, 1, 0, "~~"), (b, 0, 0, "~~")]
     spans = []
@@ -1092,16 +1127,18 @@ def _place_refs(text, numbers):
 def render_markdown(doc, paras):
     """Markdown for a list of paragraph dicts.
 
-    Consecutive items of one list are a tight list; numbered items count up
-    from 1, restarting after any other paragraph or where Pages restarts the
-    list. Footnote definitions are collected at the end.
+    Consecutive list items are a tight list; a child is indented by its
+    parent's marker width. Numbered items count up from 1 per level, starting
+    over after any other paragraph, where Pages restarts the list, and for
+    each new sub-list. Footnote definitions are collected at the end.
     """
-    blocks, notes = [], {}              # blocks: [(text, list kind or None)]
-    counter, prev = 0, None             # numbering state: last item's kind
+    blocks, notes = [], {}              # blocks: [(text, (kind, level) | None)]
+    widths, counters, kinds = [], {}, {}    # list state, reset by other paragraphs
     for p in paras:
         raw = p["raw"]
         if HEADING.get(p["semantic"]):
-            p = {**p, "runs": []}      # a heading's weight is its style, not markup
+            p = {**p, "runs": [r for r in p["runs"] if len(r) > 5 and r[5]]}
+            # a heading's weight is its style, not markup
         body = _clean(_place_refs(
             _annotate(raw, p["runs"], p.get("struck", []), p.get("links", []),
                       escape=True),
@@ -1116,29 +1153,47 @@ def render_markdown(doc, paras):
             # (a manual line break inside a note becomes a hard break)
             notes.setdefault(p["footnote"], []).append(
                 body.replace("\n", "  \n    "))
-        elif p.get("sidenote"):
+            continue
+        if p.get("sidenote"):
             blocks.append(("> " + body.replace("\n", "\n> "), None))
-        elif level:
+            continue
+        if kind and not level:
+            # a child can sit at most one level below the item before it
+            depth = min(p.get("list_level", 0), len(widths))
+            del widths[depth:]
+            for k in [k for k in counters if k > depth]:
+                del counters[k]
+            for k in [k for k in kinds if k > depth]:
+                del kinds[k]
+            if kind == "numbered":
+                again = (kinds.get(depth) == "numbered" and depth in counters
+                         and not p.get("list_start"))
+                counters[depth] = counters[depth] + 1 if again else 1
+                marker = f"{counters[depth]}. "
+            else:
+                counters.pop(depth, None)
+                marker = "- "
+            kinds[depth] = kind
+            blocks.append(("".join(" " * w for w in widths) + marker
+                           + body.replace("\n", " "), (kind, depth)))
+            widths.append(len(marker))
+            continue
+        widths.clear(), counters.clear(), kinds.clear()
+        if level:
             blocks.append(("#" * level + " " + body.replace("\n", " "), None))
-            prev = None
-        elif kind == "numbered":
-            counter = counter + 1 if prev == "numbered" and not p.get("list_start") else 1
-            blocks.append((f"{counter}. " + body.replace("\n", " "), kind))
-            prev = kind
-        elif kind:
-            blocks.append(("- " + body.replace("\n", " "), kind))
-            prev = kind
         else:
             blocks.append((body.replace("\n", "  \n"), None))   # LS -> hard break
-            prev = None
     for n in sorted(notes):
         first, *rest = notes[n]
         blocks.append((f"[^{n}]: {first}", None))
         blocks.extend(("    " + more, None) for more in rest)
     out = ""
-    for k, (text, kind) in enumerate(blocks):
-        out += ("" if k == 0 else "\n" if kind and kind == blocks[k - 1][1]
-                else "\n\n") + text
+    for k, (text, item) in enumerate(blocks):
+        before = blocks[k - 1][1] if k else None
+        # items run on without a blank line, except where a different kind of
+        # list begins at the same level
+        tight = item and before and (item[1] != before[1] or item[0] == before[0])
+        out += ("" if k == 0 else "\n" if tight else "\n\n") + text
     return out + "\n"
 
 

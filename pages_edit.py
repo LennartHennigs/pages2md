@@ -301,6 +301,31 @@ def carry_run(val, at, value, bound):
     return set_style_at(val, at, value)
 
 
+def payload_at(val, index):
+    """The fields (bar the index) of the entry in force at `index`, or None.
+
+    For run-length tables whose values are plain numbers, not references --
+    the list-level table -- where char_value_at has no ref to return.
+    """
+    best = None
+    for idx, _ref, sub in entry_rows(val):
+        if idx > index:
+            break
+        best = emit([t for t in tokenize(sub) if t[0] != 1])
+    return best
+
+
+def carry_payload(val, at, payload, bound):
+    """Make `payload` the value in force at `at`, as carry_run does for refs."""
+    if (payload is None or at >= bound or has_entry_at(val, at)
+            or payload_at(val, at) == payload):
+        return val
+    rows = [(i, sub) for i, _r, sub in entry_rows(val)]
+    rows.append((at, emit([(1, 0, write_varint(at))]) + payload))
+    rows.sort(key=lambda r: r[0])
+    return emit([(1, 2, sub) for _i, sub in rows])
+
+
 def isolate_insertion(val, at, length, bound):
     """Keep `length` characters just inserted at `at` out of the preceding run.
 
@@ -975,12 +1000,17 @@ class Document:
                 keep = effective_style_at(val, end) if styled else None
                 run = num in RUN_TABLES and table_kind(val) == "index"
                 carry = char_value_at(val, end) if run else None
+                # list levels are run-length too, holding numbers not refs
+                leveled = num == F_LEVELS and table_kind(val) == "index"
+                carry_level = payload_at(val, end) if leveled else None
                 val = drop_entries_in(val, start, end)
                 val, _n = shift_table(val, start, end, delta)
                 if styled:
                     val = self._restate_following(val, start, keep, bound)
                 elif run:
                     val = carry_run(val, start, carry, bound)
+                elif leveled:
+                    val = carry_payload(val, start, carry_level, bound)
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
         self._write_text(raw[:start] + raw[end:])
@@ -1181,6 +1211,7 @@ from pages2md import (outline, section_range, index_path, load_index,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS_RUN,
                       C_TEXT, C_DATE, C_AUTHOR, C_NEXT, APPLE_EPOCH,
                       PARA_BREAKS, PARA_SPLIT, F_ATTACHMENTS, FOOTNOTE_MARK,
+                      F_LEVELS,
                       flow_view,
                       # text is handled as a UTF-16 view; see pages2md
                       u16, from_u16, show)

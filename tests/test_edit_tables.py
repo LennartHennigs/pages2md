@@ -6,7 +6,7 @@ went wrong before the fix.
 import os, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fixture import (write_pages, table, comment_table, rows, ranges,
+from fixture import (write_pages, table, comment_table, rows, ranges, para_levels,
                      tables_of, F_PARA_TBL, F_LIST_TBL, F_CHAR_TBL,
                      F_INSERTIONS, F_DELETIONS, F_COMMENTS)
 import pages_edit as E
@@ -114,6 +114,65 @@ class DeleteParagraphKeepsRuns(DocCase):
         doc = self.doc(text)
         self.assertEqual(doc.clear_range(5, 11), 1)     # just "BBBB"
         self.assertEqual(doc.text()[0], "AAAA\n\x04CCCC\n")
+
+
+def levels(doc):
+    """[(index, level)] of the list-level table (field 6) of the selected storage."""
+    val = tables_of(doc)[6]
+    return [(i, E.read_varint(E.parse_fields_of(sub)[2][0], 0)[0])
+            for i, _r, sub in E.entry_rows(val)]
+
+
+class DeleteParagraphKeepsListLevels(DocCase):
+    """The list-level table is run-length like the style tables: an entry
+    holds until the next. Dropping the entry of a deleted item demoted the
+    items after it that relied on it."""
+
+    # a(0) b(1) c(1) d(0)  --  b and c share one entry
+    TEXT = "a\nb\nc\nd\n"
+
+    def _doc(self, rows_):
+        path = write_pages(os.path.join(self.tmp.name, "lv.pages"), self.TEXT,
+                           {F_PARA_TBL: table([(0, 1)]), 6: para_levels(rows_)})
+        return E.Document(path)
+
+    def test_the_item_after_a_deleted_one_keeps_its_level(self):
+        doc = self._doc([(0, 0), (2, 1), (6, 0)])
+        doc.delete_paragraph(2)                      # b
+        self.assertEqual(doc.text()[0], "a\nc\nd\n")
+        self.assertEqual(levels(doc), [(0, 0), (2, 1), (4, 0)])
+
+    def test_deleting_the_last_item_of_a_run_changes_nothing_else(self):
+        doc = self._doc([(0, 0), (2, 1), (6, 0)])
+        doc.delete_paragraph(4)                      # c
+        self.assertEqual(levels(doc), [(0, 0), (2, 1), (4, 0)])
+
+    def test_deleting_the_first_paragraph(self):
+        doc = self._doc([(0, 1), (4, 0)])            # a, b level 1; c, d level 0
+        doc.delete_paragraph(0)
+        self.assertEqual(levels(doc), [(0, 1), (2, 0)])
+
+    def test_an_entry_at_the_next_paragraph_is_left_alone(self):
+        doc = self._doc([(0, 0), (2, 2), (4, 1), (6, 0)])
+        doc.delete_paragraph(2)                      # b, level 2; c has its own entry
+        self.assertEqual(levels(doc), [(0, 0), (2, 1), (4, 0)])
+
+    def test_the_level_after_the_end_is_not_invented(self):
+        doc = self._doc([(0, 0), (6, 2)])            # d is level 2, last paragraph
+        doc.delete_paragraph(6)
+        self.assertEqual(levels(doc), [(0, 0)])
+
+    def test_survives_a_save_and_a_reload(self):
+        doc = self._doc([(0, 0), (2, 1), (6, 0)])
+        doc.delete_paragraph(2)
+        doc.save(doc.path)
+        self.assertEqual(levels(E.Document(doc.path)), [(0, 0), (2, 1), (4, 0)])
+
+    def test_insert_after_an_item_is_its_sibling_and_the_next_keeps_its_level(self):
+        doc = self._doc([(0, 0), (2, 1), (4, 2), (6, 0)])     # a b c(2) d
+        doc.insert_paragraph(2, "NEW")                         # before b
+        # NEW inherits a's level (0); b, c and d keep theirs, shifted by 4
+        self.assertEqual(levels(doc), [(0, 0), (6, 1), (8, 2), (10, 0)])
 
 
 class InsertParagraphIsolatesNewText(DocCase):

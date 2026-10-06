@@ -37,6 +37,13 @@ Add each change here in the same commit that makes it.
 - A "Not considered yet" section in the README (images, tables, nested lists, text
   boxes, headers and footers, character and paragraph formatting, …), and a wish list
   for a sample document in `tests/samples/README.md`.
+- Nested lists: list levels are read (field 6) and rendered as indented Markdown, with
+  numbering counted per level and each new sub-list starting at 1. JSON paragraphs carry
+  `list_level`.
+- `~~strikethrough~~` for strikethrough character formatting, merged with tracked
+  deletions where they overlap.
+- `tests/samples/formatting.pages` (Pages 15.4): a Title, character formatting, a body
+  link and a three-level list.
 - This changelog.
 
 ### Changed
@@ -62,6 +69,8 @@ Add each change here in the same commit that makes it.
   names the storages it was found in.
 - `revert` writes through a temporary file, so a failure cannot leave a half-written
   document.
+- JSON `runs` are `[start, end, bold, italic, underline, strikethrough]`; strikethrough is
+  new. `char_format` returns four flags.
 - Markdown lists are tight: consecutive items of one list have no blank line between them.
   Numbered items used to come out as `-`.
 - Markdown output escapes text that would turn into markup (`*`, `` ` ``, `[`, `]`, `\`,
@@ -106,5 +115,9 @@ Add each change here in the same commit that makes it.
 - Writing no longer crashes where `osascript` does not exist (the "Pages has it open"
   check now reports no conflict there).
 - The Markdown importer turned `my_var_name` into italic `myvarname`.
+- **Underline was read from the wrong style property** (10, which only a footnote reference
+  sets); it is 11. The JSON `runs` underline flag is now right.
+- Deleting a paragraph dropped its entry in the list-level table, demoting the list items
+  after it that relied on that entry (a nested item became a top-level one).
 
 [Unreleased]: https://github.com/lennarthennigs/pages2md/commits/claude/youthful-cori-fa1roq

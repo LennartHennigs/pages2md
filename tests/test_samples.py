@@ -17,6 +17,7 @@ SAMPLES = os.path.join(HERE, "samples")
 EMOJI = os.path.join(SAMPLES, "emoji.pages")
 KITCHEN = os.path.join(SAMPLES, "kitchen-sink.pages")
 GUIDE = os.path.join(SAMPLES, "sample-content.pages")
+FORMATTING = os.path.join(SAMPLES, "formatting.pages")
 
 
 def utf16_index(text, i):
@@ -97,7 +98,7 @@ class ReadingAfterEmoji(unittest.TestCase):
 
     def test_runs_index_the_returned_text(self):
         para = P.PagesDoc(EMOJI).paragraphs()[0]
-        (a, b, bold, _i, _u), = para["runs"]
+        (a, b, bold, *_), = para["runs"]
         self.assertEqual((para["raw"][a:b], bold), ("Bold", True))
 
     def test_offsets_are_in_pages_units(self):
@@ -256,6 +257,72 @@ class RealGuide(CopyCase):
         md = markdown(self.path)
         self.assertNotIn("human-centric", md)
         self.assertNotIn("validated with users", md)
+
+
+@unittest.skipUnless(os.path.exists(FORMATTING), "formatting.pages not present")
+class Formatting(CopyCase):
+    """Pages 15.4: a Title, character formatting, a link, nested lists."""
+    SAMPLE = FORMATTING
+
+    @classmethod
+    def setUpClass(cls):
+        cls.md = markdown(FORMATTING)
+
+    def test_title(self):
+        self.assertTrue(self.md.startswith("# Titel\n\n# Heading 1\n"))
+
+    def test_nested_list_levels(self):
+        # This(0) Is(1) A bulleted(1) list(2), as drawn in the document preview
+        self.assertIn("\n- This\n  - Is\n  - A bulleted\n    - list\n", self.md)
+
+    def test_flat_lists_are_unchanged(self):
+        self.assertIn("\n- This\n- Is\n- A bulleted\n- list\n", self.md)
+        self.assertIn("\n1. This\n2. Is\n3. A numbered one\n", self.md)
+
+    def test_character_formatting(self):
+        # italic, bold italic struck through, bold italic underlined; plain
+        # underline ("Lorem", "amet") has no Markdown form
+        self.assertIn("Lorem ipsum *dolor* sit amet, ~~***consectetur***~~ "
+                      "***adipiscing*** elit", self.md)
+
+    def test_underline_is_in_the_runs_not_the_markdown(self):
+        para = next(p for p in P.PagesDoc(FORMATTING).paragraphs()
+                    if p["raw"].startswith("Lorem ipsum"))
+        by_text = {para["raw"][a:b]: (bold, italic, under, strike)
+                   for a, b, bold, italic, under, strike in para["runs"]}
+        self.assertEqual(by_text["Lorem"], (False, False, True, False))
+        self.assertEqual(by_text["dolor"], (False, True, False, False))
+        self.assertEqual(by_text["consectetur"], (True, True, True, True))
+        self.assertEqual(by_text["adipiscing"], (True, True, True, False))
+
+    def test_footnote_reference_is_not_underlined(self):
+        # its style sets property 10, which is not underline
+        para = next(p for p in P.PagesDoc(FORMATTING).paragraphs()
+                    if "footnote" in p["raw"])
+        self.assertEqual(para["runs"], [])
+
+    def test_body_link(self):
+        self.assertIn("ut [aliquip](http://google.de) ex ea", self.md)
+
+    def test_levels_in_json(self):
+        levels = [p["list_level"] for p in P.PagesDoc(FORMATTING).paragraphs()
+                  if p["list_kind"]]
+        # bullets (4), numbers (3), the nested list (4), then three bullets
+        self.assertEqual(levels, [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0])
+
+    def test_deleting_a_nested_item_keeps_the_levels_of_the_rest(self):
+        doc = E.Document(self.path)
+        raw = doc.text()[0]
+        doc.delete_paragraph(raw.rindex("Is \nA bulleted\nlist"))   # level 1
+        doc.save(self.path)
+        self.assertIn("\n- This\n  - A bulleted\n    - list\n", markdown(self.path))
+
+    def test_edit_text_in_a_nested_item_keeps_the_levels(self):
+        before = markdown(self.path)
+        self.edit("replace", "-f", "A bulleted", "-r", "Edited", "--occurrence", "2")
+        after = markdown(self.path)
+        self.assertEqual(after, before.replace("  - A bulleted\n    - list",
+                                               "  - Edited\n    - list"))
 
 
 if __name__ == "__main__":

@@ -133,7 +133,11 @@ yields the current, resolved text:
 ### Bold/italic live in the style properties
 
 `field 11` of a style archive is the properties message: `field 1` = bold, `field 2` =
-italic, `field 3` = size (LE float), `field 5` = font name, `field 10` = underline.
+italic, `field 3` = size (LE float), `field 5` = font name, `field 11` = underline,
+`field 12` = strikethrough. (An earlier version of these notes said `field 10` was
+underline. It is not: Pages' own built-in "Underline", "Strikethrough", "Italic" and
+"Emphasis" styles set 11, 12, 2 and 1, and field 10 appears only on the style of a
+footnote reference, which is superscript. Seen in Pages 14.5 and 15.4 files.)
 Sniffing the font name alone found only 13 of 236 bold runs on the test document —
 read the booleans.
 
@@ -172,10 +176,13 @@ An edit whose boundary falls between the two halves of a pair is refused.
   level): 0 none, 1 image, 2 bullet text, 3 numbered. "Lettered", "Numbered" and "Harvard"
   are all 3. The semantic names in field 1 stay English in a German document, but the
   label type is what to trust.
+- **List levels** are field 6, run-length, entries `{index, level, 0}`: an entry holds
+  until the next. In `formatting.pages`: `This` = 0, `Is` and `A bulleted` = 1 (one entry
+  covers both), `list` = 2, then an entry back to 0. The document's preview image agrees.
+  Deleting a paragraph used to drop its entry and demote the paragraphs that relied on it.
 - **List restarts** are field 14, entries `{index, first, second}`: `first = 1` at the
   paragraph that starts a list, `0` at the next one to say "continue". Not read: any
-  start-at value (probably `second`), and the nesting level (not located; nobody has
-  made a sample with nested lists yet).
+  start-at value (probably `second`).
 
 ## How I Got This Wrong
 

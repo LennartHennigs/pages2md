@@ -46,21 +46,28 @@ on headings, localised style names ("Text", "Überschrift", "Fußnote"). It foun
 footnote paragraph-splitting bug. The comment author's name was replaced with "Sample
 Author"; the text and two hyperlinks are unchanged.
 
+## `formatting.pages`
+
+Saved by Pages 15.4: the kitchen-sink document plus a Title ("Titel"), character
+formatting (italic, bold italic struck through, bold italic underlined, plain underline),
+a hyperlink in the body text (`http://google.de`), and a bulleted list nested three
+levels deep (This, then Is and A bulleted one level in, then list two levels in).
+
 ## Wanted: `fidelity.pages`
 
 What would let `pages2md.py` cover the rows of README ▸ *Not considered yet*. One document,
 throwaway text, English, saved by Pages from the Blank template:
 
-1. A **bulleted list nested three levels deep**, then a **numbered list nested three
-   levels deep**, then a bullet list nested under a numbered item. Add one numbered list
-   that **starts at 5**, and a second numbered list directly after another that
-   **continues** its numbering.
+1. A **numbered list nested three levels deep**, then a bullet list nested under a
+   numbered item (a bulleted list nested three levels is already in `formatting.pages`).
+   Add one numbered list that **starts at 5**, and a second numbered list directly after
+   another that **continues** its numbering.
 2. A **table** (3 columns × 3 rows, header row, one cell with two lines of text, one
    merged cell).
 3. An **image** with a caption (a small PNG), and one image inside a paragraph (inline).
-4. A **hyperlink in the body text**, one on a whole word and one on a part of a bold word.
-5. **Inline formatting**: underline, strikethrough, superscript, subscript, a monospace
-   font, a coloured word.
+4. A hyperlink on **part of a bold word** (a link on a plain word is in `formatting.pages`).
+5. **Inline formatting**: superscript, subscript, a monospace font, a coloured word
+   (underline and strikethrough are in `formatting.pages`).
 6. **Paragraph styles**: Title, Subtitle, Block Quote, Caption, and one custom style.
 7. A **text box** and a **shape** with text, placed on the page.
 8. A **header and footer** with a page number.
