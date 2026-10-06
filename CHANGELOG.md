@@ -63,6 +63,16 @@ Add each change here in the same commit that makes it.
 
 ### Changed
 
+- Faster edits on large documents. `Document.apply` moves each attribute-table entry once
+  for all the edits of a call instead of rewriting every table after every edit: 3,000
+  replacements in a 109,000-character, 800-entry-per-table document take 50 ms (about 38 ms
+  per edit before, i.e. minutes). A single `shift_table` also reads its table with a
+  byte-level scan, which speeds up `apply_tracked`, `insert` and `delete-paragraph` about
+  four-fold. The bytes written are identical to the one-edit-at-a-time path, which is kept
+  as `_apply_sequential` and compared against on every sample.
+- `Document` reads only the `.iwa` files when it opens a package; images and previews are
+  read when `save` copies them (a 60 MB package: 335 ms and 61 MB of memory, now 20 ms and
+  1 MB). A package that changed on disk between opening and saving is refused.
 - The editor takes the body storage from the reader (`PagesDoc._body_id`) instead of
   finding "the largest text storage" a second way. No change on any sample.
 - One word for the text storages anchored in the body: **note** (a footnote, or a margin

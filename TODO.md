@@ -27,8 +27,8 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
 
 ## Code health
 
-- [ ] `Document.apply()` is O(edits × tables), about 38 ms per edit; `Document` loads the
-      whole package including media.
+- [ ] `apply_tracked` still rewrites every table after each edit (about 11 ms per edit on a
+      100,000-character document); `insert_paragraph`/`delete_paragraph` are one edit each.
 
 ## Samples wanted
 
