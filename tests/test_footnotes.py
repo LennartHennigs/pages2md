@@ -153,13 +153,13 @@ class FootnotesAsMarkdown(unittest.TestCase):
 
     def test_skip_drops_references_and_definitions(self):
         doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")])
-        md = self.md(doc, sidenotes="skip")
+        md = self.md(doc, notes="skip")
         self.assertNotIn("[^", md)
         self.assertTrue(md.startswith("A wicked problem is ill-defined."))
 
     def test_only_shows_just_the_definitions(self):
         doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")])
-        self.assertEqual(self.md(doc, sidenotes="only"), "[^1]: N.\n")
+        self.assertEqual(self.md(doc, notes="only"), "[^1]: N.\n")
 
     def test_note_anchored_elsewhere_stays_a_blockquote(self):
         # an attachment on an ordinary character is not a footnote reference

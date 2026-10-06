@@ -63,6 +63,11 @@ Add each change here in the same commit that makes it.
 
 ### Changed
 
+- One word for the text storages anchored in the body: **note** (a footnote, or a margin
+  note, which is unnumbered and renders as a blockquote). `pages2md.py --notes` replaces
+  `--sidenotes` (the old name still works), and the JSON key `sidenote` (a paragraph's
+  note storage) is now `note`. Handles stay `note1`, `note2`…, and `--where notes` is
+  unchanged.
 - Housekeeping, no change in output (checked against every sample): dead imports and the
   unused `T_AUTHOR` removed, the span-squeezing helper in the reader is a function of its
   own.

@@ -147,10 +147,6 @@ class ExtractLinks(unittest.TestCase):
         self.assertEqual(out.getvalue(), self.run_reader("formatting.pages"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class MessagesNotTracebacks(Base):
     """Each of these used to end in a traceback."""
 
@@ -213,6 +209,30 @@ class MessagesNotTracebacks(Base):
     def test_a_missing_markdown_file(self):
         msg, _ = cli("import", "/nonexistent/i.md", "--after", "Body", self.path)
         self.assertIn("/nonexistent/i.md", msg)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class NoteNaming(unittest.TestCase):
+    PATH = os.path.join(HERE, "samples", "formatting.pages")
+
+    def reader(self, *args):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            P.main([*args, self.PATH])
+        return out.getvalue()
+
+    def test_the_old_option_name_still_works(self):
+        self.assertEqual(self.reader("--sidenotes", "only"), self.reader("--notes", "only"))
+        self.assertNotEqual(self.reader("--notes", "skip"), self.reader("--notes", "only"))
+
+    def test_json_paragraphs_say_which_note_they_belong_to(self):
+        import json
+        paras = json.loads(self.reader("-t", "json", "--notes", "only"))
+        paras = paras["paragraphs"] if isinstance(paras, dict) else paras
+        self.assertTrue(paras and all(p["note"] is not None and "sidenote" not in p for p in paras))
 
 
 if __name__ == "__main__":

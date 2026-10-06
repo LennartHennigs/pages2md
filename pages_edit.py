@@ -559,7 +559,7 @@ class Document:
                              T_COMMENT_REF, T_CHANGE):
                     self.by_id[ident] = (ai, mi, mtype)   # prefer what we use
         self.slot = self._find_body()
-        # "body" plus one handle per margin note, in reading order. Notes live
+        # "body" plus one handle per note (footnote or margin note), in reading order. Notes live
         # in their own storages with their own offset spaces, which is why a
         # body-only editor cannot reach them.
         # One enumeration, shared with the reader, so a handle means the same
@@ -1220,7 +1220,7 @@ class Document:
                 rebuilt.append((num, wire, val))
 
             # A storage that has never carried a change of this kind has no
-            # table for it -- margin notes typically lack the deletions field.
+            # table for it -- notes typically lack the deletions field.
             # Without this, the replacement text is inserted but the original
             # is never marked deleted, so both end up visible.
             for num, span in ((F_DELETIONS, (start, end, del_id)),
@@ -1569,7 +1569,7 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
             rs, re_ = keep[s], keep[e - 1] + 1
         if scope:
             lo, hi = scope
-            # A margin note is in scope when its anchor is: its own offsets
+            # A note is in scope when its anchor is: its own offsets
             # live in a different space from the body's.
             inside = (lo <= anchor < hi) if anchor is not None else (
                 rs >= lo and re_ <= hi)
@@ -1848,7 +1848,7 @@ def verify(path, edits, tracked=False):
     """Re-open the written file and confirm the new text is readable."""
     try:
         doc = Document(path)
-        # every storage, not just the body: an edit may live in a margin note
+        # every storage, not just the body: an edit may live in a note
         parts = []
         for handle in doc.slots:
             doc.select(handle)

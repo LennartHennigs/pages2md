@@ -27,7 +27,6 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
 ## Code health
 
 - [ ] Body detection is duplicated between reader and editor (rule 7 in `CLAUDE.md`).
-- [ ] Naming drift: margin note, sidenote, note.
 - [ ] `Document.apply()` is O(edits × tables), about 38 ms per edit; `Document` loads the
       whole package including media.
 - [ ] Coverage is 85%. Missing tests: `plan`, `section_range`, `--page`, the page index,

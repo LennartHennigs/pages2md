@@ -499,7 +499,7 @@ writers have to go by which field is present, never by which storage they are in
 
 ### The body flow is not the document
 
-Footnotes (the notes the tools still call "margin notes" in some option names) holding a
+Footnotes (and margin notes: both are "notes", a text storage anchored in the body) holding a
 meaningful fraction of a document's prose (around 5% on the test document) live in their
 own text storages, reached from the body's attachment table
 (`field 16`): each entry maps a character index to a type `2008` archive whose `field 2`

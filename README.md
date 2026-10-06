@@ -60,7 +60,7 @@ pages2md.py -t json report.pages
 | --- | --- |
 | `-t, --to FORMAT` | `markdown` (default), `plain`, `json`, `outline`, `comments`, `links`, `styles`, `archives`, `storages` |
 | `-o, --output FILE` | write to a file instead of stdout |
-| `--sidenotes MODE` | `inline` (default), `skip`, `only` |
+| `--notes MODE` | footnotes and margin notes: `inline` (default), `skip`, `only` (`--sidenotes` still works) |
 | `--in HEADING` | only the section with this heading |
 | `--page N[-M]` | only this page or page range |
 | `--outline` | shorthand for `-t outline` |
@@ -151,8 +151,8 @@ note becomes a Markdown hard break:
 
 ```bash
 pages2md.py report.pages                      # footnotes as [^n] (default)
-pages2md.py --sidenotes only report.pages     # just the definitions
-pages2md.py --sidenotes skip report.pages     # body only, no references
+pages2md.py --notes only report.pages     # just the definitions
+pages2md.py --notes skip report.pages     # body only, no references
 ```
 
 ```

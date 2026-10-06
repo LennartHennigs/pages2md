@@ -21,7 +21,7 @@ def para(raw, **kw):
     """A paragraph dict as paragraphs() returns it, for renderer tests."""
     base = dict(raw=raw, runs=[], struck=[], semantic="Body 1", list=None,
                 list_kind=None, list_start=False, list_level=0, links=[],
-                sidenote=None,
+                note=None,
                 footnote=None, ref_nos=[], offset=0, style="Body")
     base.update(kw)
     return base
@@ -296,7 +296,7 @@ class Escaping(unittest.TestCase):
 
     def test_footnote_markers_survive_escaping(self):
         out = render(para("a * b\x0e", ref_nos=[1]),
-                     para("note", sidenote=1, footnote=1))
+                     para("note", note=1, footnote=1))
         self.assertEqual(out, "a \\* b[^1]\n\n[^1]: note\n")
 
     def test_strike_markers_are_not_escaped(self):

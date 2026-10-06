@@ -213,12 +213,12 @@ class PagesDoc:
         """Fields of one text storage, by archive id."""
         return parse_fields(self.arcs[ident][1])
 
-    def sidenotes(self):
+    def notes(self):
         """[(anchor offset in the body, storage id)] in reading order.
 
-        Margin notes live in their own storage, anchored into the body by an
-        attachment table -- which is why a body-only reader silently skips
-        them.
+        A note is any text storage anchored into the body by an attachment
+        table: a footnote (numbered, marked by a \\x0e) or a margin note.
+        That is why a body-only reader silently skips them.
         """
         out = []
         for idx, ref in self._table(self._body(), F_ATTACHMENTS):
@@ -383,7 +383,7 @@ class PagesDoc:
         handle rather than being left invisible.
         """
         body_id = self._body_id()
-        notes = self.sidenotes()
+        notes = self.notes()
         seen = {body_id} | {sid for _a, sid in notes}
         toc = self._toc_storages(body_id)
         out = [("body", body_id, None, "body")]
@@ -521,7 +521,7 @@ class PagesDoc:
         not footnotes and stay as they were (blockquotes).
         """
         raw = u16(self._raw_text())
-        return [(a, sid) for a, sid in self.sidenotes()
+        return [(a, sid) for a, sid in self.notes()
                 if raw[a:a + 1] == FOOTNOTE_MARK]
 
     def paragraphs(self, changes="accept", fields=None):
@@ -627,26 +627,30 @@ class PagesDoc:
         return out
 
 
-    def all_paragraphs(self, changes="accept", sidenotes="inline"):
-        """Body paragraphs with each margin note placed at its anchor."""
-        paras = [dict(q, sidenote=None, footnote=None, ref_nos=[])
+    def all_paragraphs(self, changes="accept", notes="inline"):
+        """Body paragraphs with each note (footnote or margin note) at its anchor.
+
+        `notes` is "inline", "skip" or "only"; a paragraph's `note` is the storage id of
+        the note it belongs to, `footnote` that note's number if it is a footnote.
+        """
+        paras = [dict(q, note=None, footnote=None, ref_nos=[])
                  for q in self.paragraphs(changes)]
-        if sidenotes == "skip":
+        if notes == "skip":
             return paras
         numbers = {a: n for n, (a, _sid) in enumerate(self.footnotes(), 1)}
         gone = self._dropped(self._body(), changes)
         for q in paras:
             q["ref_nos"] = [numbers.get(a) for a in q["refs"]]
-        notes = [dict(para, offset=anchor, sidenote=sid,
+        found = [dict(para, offset=anchor, note=sid,
                       footnote=numbers.get(anchor), ref_nos=[])
-                 for anchor, sid in self.sidenotes() if anchor not in gone
+                 for anchor, sid in self.notes() if anchor not in gone
                  for para in self.paragraphs(changes, self.storage(sid))]
-        if sidenotes == "only":
-            return notes
+        if notes == "only":
+            return found
         # a note sorts after the body paragraph it is anchored inside, since
         # that paragraph starts at or before the anchor
-        return sorted(paras + notes,
-                      key=lambda q: (q["offset"], q["sidenote"] is not None))
+        return sorted(paras + found,
+                      key=lambda q: (q["offset"], q["note"] is not None))
 
 # ----------------------------------------------------- outline and pages
 def outline(path):
@@ -1189,7 +1193,7 @@ def render_markdown(doc, paras):
             notes.setdefault(p["footnote"], []).append(
                 body.replace("\n", "  \n    "))
             continue
-        if p.get("sidenote"):
+        if p.get("note"):             # a margin note: not numbered, so a blockquote
             blocks.append(("> " + body.replace("\n", "\n> "), None))
             continue
         if kind and not level:
@@ -1352,7 +1356,7 @@ def main(argv=None):
                     choices=["accept", "reject", "mark"],
                     help="tracked changes: accept (default), reject, or mark "
                          "deletions with ~~strikethrough~~")
-    ap.add_argument("--sidenotes", default="inline",
+    ap.add_argument("--notes", "--sidenotes", dest="notes", default="inline",
                     choices=["inline", "skip", "only"],
                     help="footnotes and margin notes: Markdown [^n] references "
                          "with definitions at the end (default), skip them, or "
@@ -1373,7 +1377,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     doc = PagesDoc(args.file)
-    paras = doc.all_paragraphs(args.changes, args.sidenotes)
+    paras = doc.all_paragraphs(args.changes, args.notes)
 
     # --in / --page narrow the paragraph list before anything is rendered,
     # so every format honours the scope, not just Markdown.
