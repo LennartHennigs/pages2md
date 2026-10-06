@@ -345,7 +345,11 @@ def drop_entries_in(val, start, end):
 
 MD_HEADING = re.compile(r"^(#{1,4})\s+(.*)$")
 MD_BULLET = re.compile(r"^\s*[-*]\s+(.*)$")
-MD_EMPH = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|_(.+?)_")
+# Emphasis needs text right inside its markers, and an underscore must stand
+# at a word edge: "my_var_name" and "2 * 3 * 4" are not emphasis.
+MD_EMPH = re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*"
+                     r"|\*(?!\s)(.+?)(?<!\s)\*"
+                     r"|(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)")
 
 
 def strip_markup(text):
@@ -1165,6 +1169,7 @@ class Document:
 
 # Structure and pagination are reading concerns, so they live in pages2md.
 from pages2md import (outline, section_range, index_path, load_index,
+                      text_fingerprint,
                       build_index, page_of, page_range, pages_has_open,
                       fingerprint_parts, style_ids, list_style_ids,
                       char_style_ids,
@@ -1196,14 +1201,10 @@ def fingerprint(doc):
     """Short hash of the body text.
 
     Of the text rather than the file, because Pages rewrites the whole package
-    on every save: the zip bytes change when nothing you care about did.
+    on every save: the zip bytes change when nothing you care about did. The
+    definition lives in pages2md so the reader's page index and this agree.
     """
-    parts = []
-    for handle in doc.slots:                 # body first, then notes by anchor
-        doc.select(handle)
-        parts.append(from_u16(doc.text()[0]))
-    doc.select("body")
-    return fingerprint_parts(parts)
+    return text_fingerprint(doc.reader)
 
 
 def scope_from(path, in_section, page, text_len):
@@ -1734,31 +1735,35 @@ def cmd_plan(args):
 
 
 def locate_comment(doc, args):
-    """Find the comment the user means, in whichever storage holds it."""
-    rows = []
+    """Find the comment the user means, in whichever storage holds it.
+
+    Every storage in scope is searched. Stopping at the first one that had
+    any comment made a note's comment unreachable whenever the body had one
+    too. The document is left selected on the storage that holds it.
+    """
+    on = u16(args.on).lower() if args.at is None else None
+    found = []
     for handle in handles_for(doc, getattr(args, "where", None) or "all"):
         doc.select(handle)
-        rows = doc.comment_table()
-        if rows:
-            break
-    if args.at is not None:
-        hit = [r for r in rows if r[0] == args.at]
-        if not hit:
-            sys.exit(f"no comment anchored at {args.at}; "
-                     "run `pages2md.py --comments` to list them")
-        if len(hit) > 1:
-            sys.exit(f"{len(hit)} comments share anchor {args.at}; "
-                     "use --on with distinguishing text")
-        return hit[0]
-    raw = doc.text()[0]
-    on = u16(args.on).lower()
-    hit = [r for r in rows if on in raw[r[0]:r[0] + r[1]].lower()]
-    if not hit:
-        sys.exit(f"no comment whose quoted text contains {args.on!r}")
-    if len(hit) > 1:
-        sys.exit(f"{args.on!r} matches {len(hit)} comments at "
-                 f"{[r[0] for r in hit]}; use --at")
-    return hit[0]
+        raw = doc.text()[0]
+        for row in doc.comment_table():
+            if args.at is not None:
+                hit = row[0] == args.at
+            else:
+                hit = on in raw[row[0]:row[0] + row[1]].lower()
+            if hit:
+                found.append((handle, row))
+    what = (f"anchored at {args.at}" if args.at is not None
+            else f"whose quoted text contains {args.on!r}")
+    if not found:
+        sys.exit(f"no comment {what}; run `pages2md.py --comments` to list them")
+    if len(found) > 1:
+        where = ", ".join(f"{h} @{r[0]}" for h, r in found)
+        sys.exit(f"{len(found)} comments {what} ({where}); narrow it with "
+                 f"{'--on' if args.at is not None else '--at'} or --where")
+    handle, row = found[0]
+    doc.select(handle)
+    return row
 
 
 def comment_preamble(args):
@@ -2097,8 +2102,15 @@ def cmd_revert(args):
     if blob.returncode:
         sys.exit(f"cannot read {name} at {args.ref}: "
                  f"{blob.stderr.decode(errors='replace').strip()}")
-    with open(args.file, "wb") as fh:
-        fh.write(blob.stdout)
+    tmp = args.file + ".tmp"            # never leave a half-written document
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(blob.stdout)
+        os.replace(tmp, args.file)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     print(f"restored {name} from {args.ref} ({len(blob.stdout):,} bytes)")
     vcs_snapshot(args.file, "Revert to " + args.ref)
 

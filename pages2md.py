@@ -596,11 +596,19 @@ def fingerprint_parts(texts):
 
 
 def text_fingerprint(path):
+    """Fingerprint over every text storage except the generated TOC.
+
+    Body first, then footnotes and margin notes in anchor order, then
+    everything else (captions, text boxes) by id -- the order `storages()`
+    lists them in. The editor delegates here, so the two cannot differ;
+    before, the reader hashed only the body and its notes.
+    """
     doc = path if isinstance(path, PagesDoc) else PagesDoc(path)
     texts = [doc._raw_text()]
-    for _anchor, sid in doc.sidenotes():
-        texts.append(b"".join(doc.storage(sid).get(F_TEXT, []))
-                     .decode("utf-8", "replace"))
+    for _handle, sid, _anchor, kind in doc.storages()[1:]:
+        if kind != "toc" and sid is not None:
+            texts.append(b"".join(doc.storage(sid).get(F_TEXT, []))
+                         .decode("utf-8", "replace"))
     return fingerprint_parts(texts)
 
 
@@ -765,6 +773,16 @@ end tell
 end timeout"""
 
 
+def applescript_quote(text):
+    """Escape a string for use inside an AppleScript "..." literal."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def index_script(doc):
+    """The layout script for one document, with its path safely quoted."""
+    return PAGE_SCRIPT % applescript_quote(os.path.abspath(doc))
+
+
 def significant(c):
     """Characters Pages and we agree on; everything else is layout noise."""
     return not (c.isspace() or ord(c) < 32 or c in " ￼")
@@ -782,7 +800,7 @@ def build_index(doc, raw):
         sys.exit(f"Pages already has {os.path.basename(doc)} open. Indexing "
                  "would reopen and close it, discarding unsaved changes -- "
                  "close it in Pages first, or index a copy.")
-    res = subprocess.run(["osascript", "-e", PAGE_SCRIPT % os.path.abspath(doc)],
+    res = subprocess.run(["osascript", "-e", index_script(doc)],
                          capture_output=True, text=True)
     if res.returncode:
         sys.exit("could not ask Pages for the page layout (is Pages "
@@ -812,7 +830,13 @@ def build_index(doc, raw):
 
 
 def page_of(bounds, offset):
-    return bisect.bisect_right(bounds, offset) if bounds else None
+    """Page number of a body offset; None without an index or an anchor.
+
+    A caption or text box has no position in the flow, so no page.
+    """
+    if not bounds or offset is None:
+        return None
+    return bisect.bisect_right(bounds, offset)
 
 
 def page_range(doc, spec, text_len):
@@ -870,21 +894,53 @@ def _clean(s, keep_breaks=True):
     return s.strip()
 
 
-def _emphasize(raw, runs):
-    """Wrap bold/italic runs in Markdown markers, right-to-left."""
-    for start, end, bold, italic, _ in sorted(runs, reverse=True):
-        mark = "**" if bold else ("*" if italic else "")
-        seg = raw[start:end]
-        core = seg.strip()
-        # a run over only invisible characters (a footnote reference has its
-        # own italic/underline style) would leave bare markers behind once
-        # _clean strips them
-        if not mark or not _clean(core, False):
+def _merged_marks(raw, runs):
+    """[[start, end, marker]] -- one entry per stretch of identical emphasis.
+
+    Runs over invisible characters only (a footnote reference has its own
+    style) are dropped first, so they neither leave bare markers behind nor
+    drag the reference inside its neighbour's emphasis. Touching runs with
+    the same marker merge: "**foo****bar**" becomes "**foobar**".
+    """
+    out = []
+    for start, end, bold, italic, _u in sorted(runs):
+        mark = "***" if bold and italic else "**" if bold else "*" if italic else ""
+        if not mark or not _clean(raw[start:end].strip(), False):
             continue
-        lead = seg[:len(seg) - len(seg.lstrip())]
-        trail = seg[len(seg.rstrip()):]
-        raw = raw[:start] + lead + mark + core + mark + trail + raw[end:]
+        if out and out[-1][2] == mark and start <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], end)
+        else:
+            out.append([start, end, mark])
+    return out
+
+
+def _annotate(raw, runs, struck=()):
+    """Put Markdown emphasis and ~~strikethrough~~ markers around spans of `raw`.
+
+    All positions refer to the original text, so every marker is collected
+    first and inserted right-to-left in one pass -- inserting strike markers
+    first used to shift the emphasis runs, which is why a paragraph with a
+    marked deletion lost its bold. Where spans meet, strikethrough is the
+    outer layer: opens run outer to inner, closes inner to outer.
+    """
+    marks = []                                    # (pos, closing, depth, text)
+    for a, b in struck:
+        if raw[a:b].strip():
+            marks += [(a, False, 0, "~~"), (b, True, 0, "~~")]
+    for start, end, mark in _merged_marks(raw, runs):
+        seg = raw[start:end]
+        lead = len(seg) - len(seg.lstrip())
+        trail = len(seg) - len(seg.rstrip())
+        marks += [(start + lead, False, 1, mark), (end - trail, True, 1, mark)]
+    marks.sort(key=lambda m: (m[0], 0 if m[1] else 1, -m[2] if m[1] else m[2]),
+               reverse=True)
+    for pos, _closing, _depth, text in marks:
+        raw = raw[:pos] + text + raw[pos:]
     return raw
+
+
+def _emphasize(raw, runs):
+    return _annotate(raw, runs)
 
 
 def _place_refs(text, numbers):
@@ -903,11 +959,8 @@ def render_markdown(doc, paras):
         raw = p["raw"]
         if HEADING.get(p["semantic"]):
             p = {**p, "runs": []}      # a heading's weight is its style, not markup
-        for a, b in sorted(p.get("struck", []), reverse=True):
-            if raw[a:b].strip():
-                raw = raw[:a] + "~~" + raw[a:b] + "~~" + raw[b:]
         body = _clean(_place_refs(
-            _emphasize(raw, p["runs"]) if not p.get("struck") else raw,
+            _annotate(raw, p["runs"], p.get("struck", [])),
             p.get("ref_nos", [])))
         if not body:
             continue
