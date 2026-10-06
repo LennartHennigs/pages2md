@@ -1388,6 +1388,9 @@ def resolve_plan(doc, path, entries):
         for required in ("find", "replace"):
             if required not in entry:
                 sys.exit(f"edit {n}: missing `{required}`")
+            if not isinstance(entry[required], str):
+                sys.exit(f"edit {n}: `{required}` must be a string, not "
+                         f"{type(entry[required]).__name__}")
         scope, where = scope_from(path, entry.get("in"), entry.get("page"),
                                   text_len)
         which = None if entry.get("all") else (entry.get("occurrence") or 1)
@@ -1483,6 +1486,19 @@ def vcs_snapshot(doc, message):
 
 
 # ---------------------------------------------------------------- commands
+def require_search_text(pattern, tag=""):
+    """Refuse an empty search text, wherever one is taken.
+
+    It matches at every character, so a replacement would be written between all of
+    them (`replace -f "" -r X --all` turned "Titel" into "XTXiXtXeXlX"). A zero-width
+    *pattern* that means something -- `^`, `$`, `\\b` -- is not empty text and works.
+    """
+    if not pattern:
+        sys.exit(f"{tag}empty search text matches at every character, so it would change "
+                 "every position. Give the text to look for; to act at the start or end of a "
+                 "paragraph use a zero-width pattern such as ^ or $ with --regex.")
+
+
 def matches(doc, pattern, use_raw, regex, scope, anchor=None):
     """Raw matches in the currently selected storage.
 
@@ -1490,6 +1506,7 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
     later, by check_edits, so that an unrelated match cannot block the one you
     actually asked for.
     """
+    require_search_text(pattern)
     if use_raw:
         hay, keep = doc.text()[0], None
     else:
@@ -1609,6 +1626,7 @@ def resolve(doc, pattern, replacement, which, use_raw, regex, scope=None,
     -> [(handle, [(raw_start, raw_end, new, old), ...]), ...]
     """
     tag = f"{label}: " if label else ""
+    require_search_text(pattern, tag)
     handles = handles_for(doc, where)
     found = search(doc, pattern, use_raw, regex, scope, handles)
 
@@ -1869,6 +1887,8 @@ def locate_comment(doc, args):
     any comment made a note's comment unreachable whenever the body had one
     too. The document is left selected on the storage that holds it.
     """
+    if args.at is None:
+        require_search_text(args.on)      # "" is inside every comment's text
     on = u16(args.on).lower() if args.at is None else None
     found = []
     for handle in handles_for(doc, getattr(args, "where", None) or "all"):
@@ -2049,11 +2069,12 @@ def cmd_retag(args):
 
 def cmd_insert(args):
     doc = comment_preamble(args)
-    start, end, _n, old = one_match(doc, args, args.after or args.before)
+    after = args.after is not None                  # "" is given, and refused as empty
+    start, end, _n, old = one_match(doc, args, args.after if after else args.before)
     style_id, display = (resolve_style(args) if args.style else (None, "inherited"))
     raw, ps, pe = located_paragraph(doc, start)
-    at = after_paragraph(raw, pe) if args.after else ps
-    print(f"insert {'after' if args.after else 'before'} the paragraph at @{ps}"
+    at = after_paragraph(raw, pe) if after else ps
+    print(f"insert {'after' if after else 'before'} the paragraph at @{ps}"
           f", as {args.style or 'the surrounding style'} ({display}):")
     print(f"  anchor: {show(raw[ps:pe][:80])!r}")
     print(f"  new:    {args.text[:80]!r}")
@@ -2119,11 +2140,12 @@ def cmd_import(args):
         if len(going) > 3:
             print(f"  - …and {len(going) - 3} more")
     else:
-        start = one_match(doc, args, args.after or args.before)[0]
+        after = args.after is not None
+        start = one_match(doc, args, args.after if after else args.before)[0]
         raw, ps, pe = located_paragraph(doc, start)
-        at = after_paragraph(raw, pe) if args.after else ps
+        at = after_paragraph(raw, pe) if after else ps
         print(f"import {len(blocks)} paragraph(s) from {args.markdown} "
-              f"{'after' if args.after else 'before'} @{ps}:")
+              f"{'after' if after else 'before'} @{ps}:")
         print(f"  anchor: {show(raw[ps:pe][:70])!r}")
     for style, listing, text, runs in blocks:
         tag = f"{style}/{listing}" if listing else style

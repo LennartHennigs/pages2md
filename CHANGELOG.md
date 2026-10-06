@@ -151,6 +151,14 @@ Add each change here in the same commit that makes it.
 - The Markdown importer turned `my_var_name` into italic `myvarname`.
 - **Underline was read from the wrong style property** (10, which only a footnote reference
   sets); it is 11. The JSON `runs` underline flag is now right.
+- **An empty search text destroyed the document.** `replace -f "" -r X --all --write` wrote `X`
+  between every character (3638 insertions into a 3622-character document: "Titel" became
+  "XTXiXtXeXlX"); a plan entry with `"find": ""` did the same. An empty search text is now refused
+  everywhere one is taken (`find`, `replace`, `plan`, `--find-file`, `retag`, `insert`,
+  `delete-paragraph`, `format`, `import`, `comment`) with one message that says what to do instead;
+  zero-width patterns such as `^` and `$` with `--regex` still work. A plan entry whose `find` or
+  `replace` is not a string is refused too, naming the entry, and `insert --after ""` no longer
+  crashes (an empty string counted as "not given").
 - **Replacing a whole annotated stretch with nothing wrote duplicate table entries.** Deleting a
   bold word (or a comment anchor, a language run, a tracked change) collapsed its run to zero
   width and left two entries at one index. `pages2md.py` then crashed reading the file
