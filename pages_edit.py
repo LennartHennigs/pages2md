@@ -538,12 +538,15 @@ def put_span(val, start, end, archive_id):
 class Document:
     def __init__(self, path):
         self.path = path
-        with zipfile.ZipFile(path) as z:
-            self.names = z.namelist()
-            self.entries = {n: z.read(n) for n in self.names}
-            self.compress = {i.filename: i.compress_type for i in z.infolist()}
-        body_payload = iwa_decode(self.entries[BODY_ENTRY])
-        self.arcs = archives(body_payload)
+        with package_errors(path):
+            with zipfile.ZipFile(path) as z:
+                self.names = z.namelist()
+                self.entries = {n: z.read(n) for n in self.names}
+                self.compress = {i.filename: i.compress_type for i in z.infolist()}
+            if BODY_ENTRY not in self.entries:
+                sys.exit(f"{os.path.basename(path)}: no {BODY_ENTRY}; not a Pages document")
+            body_payload = iwa_decode(self.entries[BODY_ENTRY])
+            self.arcs = archives(body_payload)
         self.by_id = {}
         for ai, (info, msgs) in enumerate(self.arcs):
             ident = next((read_varint(v, 0)[0]
@@ -1251,7 +1254,7 @@ from pages2md import (outline, section_range, index_path, load_index,
                       text_fingerprint,
                       build_index, page_of, page_range, pages_has_open,
                       fingerprint_parts, style_ids, list_style_ids,
-                      char_style_ids,
+                      char_style_ids, package_errors,
                       # one definition of the reverse-engineered field numbers:
                       # two tables that must agree is the worst failure mode
                       # this codebase has (reads fine, writes corrupt)
@@ -1524,7 +1527,10 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
         hay, keep = doc.accepted_map()
     # MULTILINE so ^ and $ anchor to paragraphs, which is what a caller means
     pattern = u16(pattern)
-    rx = re.compile(pattern if regex else re.escape(pattern), re.MULTILINE)
+    try:
+        rx = re.compile(pattern if regex else re.escape(pattern), re.MULTILINE)
+    except re.error as exc:
+        sys.exit(f"invalid regular expression {show(pattern)!r}: {exc}")
     out = []
     for h in rx.finditer(hay.translate(SEARCH_VIEW)):
         s, e = h.start(), h.end()
@@ -1554,8 +1560,11 @@ def check_edits(doc, selected, replacement, regex, label=None, anchor_only=False
     if replacement is not None:
         replacement = u16(replacement)
     for rs, re_, acc, span, old, h in selected:
-        new = (h.expand(replacement) if regex and replacement is not None
-               else replacement)
+        try:
+            new = (h.expand(replacement) if regex and replacement is not None
+                   else replacement)
+        except (re.error, IndexError) as exc:
+            sys.exit(f"{tag}invalid replacement {show(replacement)!r} for this pattern: {exc}")
         if splits_pair(raw, rs) or splits_pair(raw, re_):
             sys.exit(f"{tag}match at offset {rs} starts or ends inside an "
                      "emoji or other character outside the BMP; widen it to "
@@ -1729,13 +1738,23 @@ def cmd_find(args):
               f"…{pre}[{mid}]{post}…")
 
 
+def read_text_file(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError as exc:
+        sys.exit(f"cannot read {path}: {exc.strerror or exc}")
+    except UnicodeDecodeError:
+        sys.exit(f"{path} is not UTF-8 text")
+
+
 def cmd_replace(args):
     doc = Document(args.file)
     # a file almost always ends with a newline the author did not mean to match
     pattern = (args.find if args.find is not None
-               else open(args.find_file, encoding="utf-8").read().rstrip("\n"))
+               else read_text_file(args.find_file).rstrip("\n"))
     repl = (args.replace if args.replace is not None
-            else open(args.replace_file, encoding="utf-8").read().rstrip("\n"))
+            else read_text_file(args.replace_file).rstrip("\n"))
     which = None if args.all else (args.occurrence or 1)
     groups = resolve(doc, pattern, repl, which, args.raw, args.regex,
                      wanted_scope(args, doc), where=args.where)
@@ -2143,8 +2162,7 @@ def cmd_format(args):
 
 def cmd_import(args):
     doc = comment_preamble(args)
-    with open(args.markdown, encoding="utf-8") as fh:
-        blocks = parse_markdown(u16(fh.read()))     # runs in Pages' units
+    blocks = parse_markdown(u16(read_text_file(args.markdown)))   # runs in Pages' units
     if not blocks:
         sys.exit(f"{args.markdown}: nothing to import")
     styles, lists = style_ids(doc.reader), list_style_ids(doc.reader)
@@ -2494,13 +2512,8 @@ def main(argv=None):
     ix.set_defaults(func=cmd_index)
 
     args = ap.parse_args(argv)
-    try:
+    with package_errors(args.file):
         zipfile.ZipFile(args.file).close()
-    except zipfile.BadZipFile:
-        ap.error(f"{args.file} is not a Pages package "
-                 "(an iCloud placeholder/alias? use the real local file)")
-    except FileNotFoundError:
-        ap.error(f"{args.file}: no such file")
     args.func(args)
 
 

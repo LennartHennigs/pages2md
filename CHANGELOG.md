@@ -120,6 +120,10 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- Messages instead of tracebacks: a missing file, a folder, a zip that is not Pages, a
+  package without `Index/Document.iwa` and damaged IWA data (both tools); an invalid
+  regular expression or replacement group reference; an unreadable `--find-file`,
+  `--replace-file` or Markdown file. `pages_edit` no longer leaves those files open.
 - `revert HEAD~1` restored the wrong version when the document had been edited outside
   `pages_edit` since the last snapshot: the safety snapshot taken first shifted what
   `HEAD~1` meant. The ref is resolved before it, and an unknown ref changes nothing.

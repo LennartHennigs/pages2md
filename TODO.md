@@ -19,9 +19,6 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
       (retag, insert at the end, delete the last paragraph). Deleting the last paragraph,
       or one followed by a break character, leaves an empty paragraph where the preceding
       separator should go.
-- [ ] Tracebacks instead of messages: `pages2md` on a missing file or a package folder;
-      `pages_edit` on a zip without `Document.iwa` or with garbage IWA; an invalid regex
-      or replacement group reference; a missing `--find-file` or `.md`.
 - [ ] A first comment is impossible in a document that has none yet.
 
 ## Features

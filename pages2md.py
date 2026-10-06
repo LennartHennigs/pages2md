@@ -11,7 +11,7 @@ container (Apple's Snappy framing + protobuf) directly.
 
 Formats: markdown (default), plain, json, styles, archives
 """
-import argparse, bisect, datetime, hashlib, json, os, re, struct, subprocess, sys, zipfile
+import argparse, bisect, contextlib, datetime, hashlib, json, os, re, struct, subprocess, sys, zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from collections import Counter
@@ -131,12 +131,38 @@ def u16_index_map(view):
     return out
 
 
+@contextlib.contextmanager
+def package_errors(path):
+    """Say what is wrong with a file that is not a readable Pages document.
+
+    Used around opening and decoding the package, so a missing file, a folder, a zip that
+    is not Pages and damaged IWA data end in one line, not a traceback.
+    """
+    name = os.path.basename(path) or path
+    try:
+        yield
+    except FileNotFoundError:
+        sys.exit(f"{name}: no such file")
+    except IsADirectoryError:
+        sys.exit(f"{name} is a folder; give the .pages file (a package saved as a folder "
+                 "is not supported yet)")
+    except zipfile.BadZipFile:
+        sys.exit(f"{name} is not a Pages package (an iCloud placeholder or alias? "
+                 "use the real local file)")
+    except (IndexError, ValueError, KeyError, struct.error, EOFError) as exc:
+        sys.exit(f"{name}: damaged or unsupported Pages data "
+                 f"({type(exc).__name__}: {exc})")
+
+
 class PagesDoc:
     def __init__(self, path):
         self.path = path
         self.arcs = {}
-        with zipfile.ZipFile(path) as z:
+        with package_errors(path), zipfile.ZipFile(path) as z:
             names = [n for n in z.namelist() if n.endswith(".iwa")]
+            if "Index/Document.iwa" not in names:
+                sys.exit(f"{os.path.basename(path)}: no Index/Document.iwa; "
+                         "not a Pages document")
             for n in names:
                 for i, t, m in archives(iwa_decode(z.read(n))):
                     self.arcs[i] = (t, m, n)
@@ -1348,11 +1374,7 @@ def main(argv=None):
                     dest="to", help="shorthand for -t styles")
     args = ap.parse_args(argv)
 
-    try:
-        doc = PagesDoc(args.file)
-    except zipfile.BadZipFile:
-        ap.error(f"{args.file} is not a Pages package "
-                 "(an iCloud placeholder/alias? use the real local file)")
+    doc = PagesDoc(args.file)
     paras = doc.all_paragraphs(args.changes, args.sidenotes)
 
     # --in / --page narrow the paragraph list before anything is rendered,

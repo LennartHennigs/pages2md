@@ -120,10 +120,6 @@ class WhereOnStructuralCommands(Base):
             E.main(["delete-paragraph", "--on", "Body", "--where", "notes", self.path])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ExtractLinks(unittest.TestCase):
     def run_reader(self, name):
         out = io.StringIO()
@@ -149,6 +145,74 @@ class ExtractLinks(unittest.TestCase):
         with redirect_stdout(out):
             P.main(["-t", "links", os.path.join(HERE, "samples", "formatting.pages")])
         self.assertEqual(out.getvalue(), self.run_reader("formatting.pages"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class MessagesNotTracebacks(Base):
+    """Each of these used to end in a traceback."""
+
+    def exits_with(self, fn, *words):
+        with self.assertRaises(SystemExit) as cm, redirect_stdout(io.StringIO()):
+            fn()
+        msg = str(cm.exception.code)
+        for w in words:
+            self.assertIn(w, msg)
+        return msg
+
+    def bad_packages(self):
+        import zipfile
+        nodoc = os.path.join(self.tmp.name, "nodoc.pages")
+        with zipfile.ZipFile(nodoc, "w") as z:
+            z.writestr("Metadata/x.txt", "hi")
+        garbage = os.path.join(self.tmp.name, "garbage.pages")
+        with zipfile.ZipFile(garbage, "w") as z:
+            z.writestr("Index/Document.iwa", b"\x00\x01garbage")
+        folder = os.path.join(self.tmp.name, "folder.pages")
+        os.mkdir(folder)
+        notzip = os.path.join(self.tmp.name, "notzip.pages")
+        with open(notzip, "w") as fh:
+            fh.write("hello")
+        return {"missing": os.path.join(self.tmp.name, "nope.pages"), "nodoc": nodoc,
+                "garbage": garbage, "folder": folder, "notzip": notzip}
+
+    def test_reader_on_unusable_packages(self):
+        for kind, path in self.bad_packages().items():
+            with self.subTest(kind=kind):
+                self.exits_with(lambda: P.PagesDoc(path), os.path.basename(path))
+
+    def test_editor_on_unusable_packages(self):
+        for kind, path in self.bad_packages().items():
+            with self.subTest(kind=kind):
+                self.exits_with(lambda: E.Document(path), os.path.basename(path))
+
+    def test_the_command_line_of_both_tools(self):
+        for kind, path in self.bad_packages().items():
+            with self.subTest(kind=kind):
+                self.exits_with(lambda: P.main([path]))
+                self.exits_with(lambda: E.main(["find", "x", path]))
+
+    def test_an_invalid_regex(self):
+        msg, _ = cli("find", "--regex", "(", self.path)
+        self.assertIn("regular expression", msg)
+
+    def test_an_invalid_group_reference(self):
+        msg, _ = cli("replace", "--regex", "-f", "(Body)", "-r", "\\2", self.path)
+        self.assertIn("replacement", msg)
+
+    def test_a_missing_find_file(self):
+        msg, _ = cli("replace", "--find-file", "/nonexistent/f.txt", "-r", "x", self.path)
+        self.assertIn("/nonexistent/f.txt", msg)
+
+    def test_a_missing_replace_file(self):
+        msg, _ = cli("replace", "-f", "Body", "--replace-file", "/nonexistent/r.txt", self.path)
+        self.assertIn("/nonexistent/r.txt", msg)
+
+    def test_a_missing_markdown_file(self):
+        msg, _ = cli("import", "/nonexistent/i.md", "--after", "Body", self.path)
+        self.assertIn("/nonexistent/i.md", msg)
 
 
 if __name__ == "__main__":
