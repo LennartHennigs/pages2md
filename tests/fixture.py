@@ -10,7 +10,8 @@ import os, struct, sys, zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from iwa_codec import emit, write_varint, pack_archives, iwa_encode, read_varint
 import pages_edit as E
-from pages2md import (T_STORAGE, F_TEXT, F_PARA_TBL, F_LIST_TBL, F_CHAR_TBL,
+from pages2md import (T_STORAGE, T_CHAR_STYLE, P_BOLD, P_ITALIC, F_PROPS,
+                      F_TEXT, F_PARA_TBL, F_LIST_TBL, F_CHAR_TBL,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS)
 
 BODY_ID = 100
@@ -42,8 +43,19 @@ def change(kind):
                  (4, 2, b"00000000-0000-0000-0000-000000000000")])
 
 
-def write_pages(path, text, tables, with_changes=True):
-    archives = [(BODY_ID, T_STORAGE, storage(text, tables))]
+def char_style(bold=False, italic=False):
+    """A character-style archive that sets only weight and slant."""
+    props = []
+    if bold:
+        props.append((P_BOLD, 0, write_varint(1)))
+    if italic:
+        props.append((P_ITALIC, 0, write_varint(1)))
+    return emit([(F_PROPS, 2, emit(props))])
+
+
+def write_pages(path, text, tables, with_changes=True, extra=()):
+    """`extra`: further (id, type, body) archives, e.g. character styles."""
+    archives = [(BODY_ID, T_STORAGE, storage(text, tables))] + list(extra)
     if with_changes:
         archives += [(DEL_TEMPLATE_ID, E.T_CHANGE, change(2)),
                      (INS_TEMPLATE_ID, E.T_CHANGE, change(1))]

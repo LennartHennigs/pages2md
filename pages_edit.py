@@ -704,16 +704,7 @@ class Document:
             marks.setdefault(0, None)       # a run-length table must start at 0
             table = emit([(1, 2, entry_bytes(i, marks[i]))
                           for i in sorted(marks)])
-        rebuilt, seen = [], False
-        for num, wire, val in tokenize(self._msg):
-            if num == field:
-                val, seen = table, True
-            rebuilt.append((num, wire, val))
-        if not seen:
-            at = next((i for i, (n2, _w, _v) in enumerate(rebuilt)
-                       if n2 > field), len(rebuilt))
-            rebuilt.insert(at, (field, 2, table))
-        self._msg = emit(rebuilt)
+        self._put_field(field, table)
 
     def thread_ids(self, head):
         """Every comment archive in one thread, head first."""
@@ -794,24 +785,53 @@ class Document:
                                 if r[2] != ref_id])
 
     def format_run(self, start, end, bold=False, italic=False):
-        """Apply bold/italic across [start, end) of the selected storage."""
+        """Apply bold/italic across [start, end) of the selected storage.
+
+        Neither bold nor italic means plain: a null entry, "no override from
+        here", which hands the text back to its paragraph style. No
+        character style is needed for that -- looking one up for
+        (False, False) never found anything.
+
+        The range becomes one run: entries inside it are dropped, or an
+        italic word in the middle would win back its own span.
+        """
         if end <= start:
             return 0
-        want = char_style_ids(self.path).get((bold, italic))
-        if want is None:
-            sys.exit(f"this document has no plain {'bold' if bold else ''}"
-                     f"{'/' if bold and italic else ''}"
-                     f"{'italic' if italic else ''} character style to reuse; "
-                     "apply it once in Pages and try again")
-        rebuilt = []
-        for num, wire, val in tokenize(self._msg):
-            if num == F_CHAR_TBL:
-                after = char_value_at(val, end)     # read before changing
-                val = set_style_at(val, start, want)
-                val = set_style_at(val, end, after)
-            rebuilt.append((num, wire, val))
-        self._msg = emit(rebuilt)
+        want = None
+        if bold or italic:
+            # the reader parsed the stylesheet once already; re-reading the
+            # file here cost a full parse per emphasis run during import
+            want = char_style_ids(self.reader).get((bold, italic))
+            if want is None:
+                name = "/".join(k for k, on in (("bold", bold),
+                                                ("italic", italic)) if on)
+                sys.exit(f"this document has no plain {name} character style "
+                         "to reuse; apply it once in Pages and try again")
+        val = parse_fields_of(self._msg).get(F_CHAR_TBL, [None])[0]
+        after = char_value_at(val, end)             # read before changing
+        kept = [(i, sub) for i, _r, sub in entry_rows(val)
+                if not start <= i <= end]
+        kept.append((start, entry_bytes(start, want)))
+        if end < len(self.text()[0]):
+            kept.append((end, entry_bytes(end, after)))
+        if val is None and start > 0:
+            kept.append((0, entry_bytes(0)))       # a new table starts at 0
+        kept.sort(key=lambda r: r[0])
+        self._put_field(F_CHAR_TBL, emit([(1, 2, sub) for _i, sub in kept]))
         return 1
+
+    def _put_field(self, field, value):
+        """Replace a field of the selected storage, or add it in field order."""
+        rebuilt, seen = [], False
+        for num, wire, val in tokenize(self._msg):
+            if num == field:
+                val, seen = value, True
+            rebuilt.append((num, wire, val))
+        if not seen:
+            at = next((i for i, (n2, _w, _v) in enumerate(rebuilt)
+                       if n2 > field), len(rebuilt))
+            rebuilt.insert(at, (field, 2, value))
+        self._msg = emit(rebuilt)
 
     @staticmethod
     def _restate_following(val, write_at, keep, bound):
@@ -1853,6 +1873,9 @@ def cmd_format(args):
     kinds = [k for k, on in (("bold", args.bold), ("italic", args.italic)) if on]
     if not kinds and not args.plain:
         sys.exit("say what to apply: --bold, --italic, or --plain")
+    if kinds and args.plain:
+        sys.exit("--plain removes emphasis; it cannot be combined with "
+                 "--bold or --italic")
     print(f"format @{start} as {', '.join(kinds) if kinds else 'plain'}:")
     print(f"  {old[:90]!r}")
     if args.write:
