@@ -6,12 +6,19 @@ round-trip. Two command-line tools and the lossless codec they share.
 | | |
 | --- | --- |
 | `pages2md.py` | convert a `.pages` document to Markdown, plain text, or JSON |
-| `pages_edit.py` | find and replace text inside a `.pages` document |
+| `pages_edit.py` | find and replace text, restructure paragraphs, import Markdown, write comments, keep a history |
 | `iwa_codec.py` | the lossless IWA/protobuf layer both are built on |
 
-**Requirements:** Python 3.8+. Nothing else — no `protobuf`, no `snappy`, no Pages
-running. See [`insights.md`](insights.md) for how the file format works and why these
-tools are built the way they are.
+**Requirements:** Python 3.8+ (written for it; the tests have only been run on 3.13).
+Nothing else — no `protobuf`, no `snappy`, no Pages running. See
+[`insights.md`](insights.md) for how the file format works and why these tools are built
+the way they are, [`CHANGELOG.md`](CHANGELOG.md) for what changed, and
+[`CLAUDE.md`](CLAUDE.md) if you are working on the code.
+
+**Status:** reading is well covered by tests and real documents. Writing is more
+delicate: the changes listed under *Unreleased* in the changelog are tested against
+synthetic and real documents, but no file they wrote has been opened in Pages yet. Work
+on a copy until they have been.
 
 ## Why
 
@@ -23,7 +30,7 @@ unresolved tracked changes leave both the original and the edit mixed into the t
 | | DOCX → pandoc | `pages2md.py` |
 | --- | --- | --- |
 | Headings | flattened unless style IDs are patched by hand | read from the style table |
-| Bullet lists | can vanish entirely | recovered |
+| Lists | bullets can vanish entirely | recovered: bullet, numbered and nested |
 | Tracked changes | both versions land in the text | accept / reject / mark |
 | Needs Pages running | yes | no |
 
@@ -224,8 +231,9 @@ pages2md.py --changes reject report.pages   # The team may work on this next qua
 
 ## pages_edit.py — writing
 
-Replaces text in the document's body flow. Every character index in that storage's
-attribute tables is shifted with it, so styles, lists and existing tracked changes stay
+Replaces text in the document's body flow, its footnotes and its other text storages
+(`--where` picks which). Every character index in that storage's attribute tables is
+shifted with it, so styles, lists, links, comments and existing tracked changes stay
 attached to the right words.
 
 **Edits are a dry run unless you pass `--write`.**
@@ -442,9 +450,11 @@ other, and which one "won" would depend on the order you happened to list them i
 
 ### Fingerprints
 
-A fingerprint is a short hash of the body text — of the *text*, not the file, because
-Pages rewrites the whole package on every save, so the zip bytes change when nothing you
-care about did.
+A fingerprint is a short hash of the document's text — every text storage except the
+generated table of contents: the body, then footnotes, then captions and text boxes — of
+the *text*, not the file, because Pages rewrites the whole package on every save, so the
+zip bytes change when nothing you care about did. `pages2md.py` and `pages_edit.py` share
+one definition, so a page index and a plan agree about what "the same document" means.
 
 ```bash
 pages_edit.py fingerprint report.pages            # a1b2c3d4e5f6a1b2
@@ -484,7 +494,10 @@ one it does not have (`Body`, `Heading 1`–`4`, `Title`, `Subtitle`, `Caption`,
 Paragraph styles are run-length, and most paragraphs carry a "no change" entry that
 inherits from the one before. So every structural edit also re-states the following
 paragraph's style — without that, inserting a heading silently turns the rest of the
-chapter into headings too.
+chapter into headings too. The same goes for character styles, tracked changes, comments
+and list levels: deleting a paragraph carries the run in force after it back to where the
+paragraph was, and an inserted paragraph starts plain and outside any tracked change.
+A new paragraph takes its list level from the one before it, so it is that item's sibling.
 
 ### Importing Markdown
 
@@ -495,9 +508,10 @@ pages_edit.py import replacement.md --replace-section "Getting Started" --write 
 
 `--replace-section` swaps a whole section's content for new Markdown, heading included.
 **It refuses above 3 paragraphs removed** — see *Known issue* below; it is safe only for
-small sections until that is root-caused.
+small sections until a real Pages round-trip shows the cause is fixed.
 
-Headings (`#`–`####`), paragraphs and bullets (`-`/`*`) become real styled paragraphs.
+Headings (`#`–`####`), paragraphs and bullets (`-`/`*`) become real styled paragraphs
+(always at list level 0; numbered lists, links and nesting are not imported).
 The dry run shows what each block will become:
 
 ```
@@ -574,7 +588,10 @@ page count roughly doubling. A single isolated deletion (not preceded by others)
 made Pages hang on save.
 
 The cause is not found. Table shifting was checked by hand against a real document and
-shifts correctly; the fault is elsewhere. `import --replace-section` therefore **refuses
+shifts correctly. One lead has since been fixed — deleting a paragraph could drop the end
+of a character-style or tracked-change run and let it spread over everything after it,
+which would look much like this — but that has only been shown in tests, not in Pages.
+The limit stays until it is. `import --replace-section` therefore **refuses
 above 3 removed paragraphs** rather than risk producing a file like the one above. Do not
 raise that limit, call `clear_range` directly, or chain many `delete-paragraph` calls in
 one write until this is understood. See `insights.md` for the investigation, and please
@@ -612,8 +629,9 @@ unverified unless stated. Each one that needs a sample is listed in
 
 - **Do not `--write` a document Pages currently has open** — Pages will overwrite your
   edit on its next save. Close it first.
-- Only the **body flow** is editable. Text boxes, headers and footers each live in their
-  own storage and are not reached.
+- The **body flow**, footnotes and the other text storages in `Document.iwa` (captions,
+  text boxes) are editable; headers and footers are not reached. Comments cannot be
+  *written* inside a text box (Pages drops them), though they can be read.
 - Indices are shifted only within the edited storage. If some other archive holds offsets
   into the body text it would not be updated; no evidence of one was found, but it cannot
   be ruled out — which is why the snapshot happens *before* the write.
@@ -623,9 +641,17 @@ unverified unless stated. Each one that needs a sample is listed in
 - `pages2md.py` reads the largest text storage, which is the body. Short documents whose
   longest text lives in a text box are not handled.
 
+## Development
+
+`CLAUDE.md` has the working rules (architecture, the offset convention, how to investigate
+a field). In short: write the failing test first, keep `CHANGELOG.md` current in the same
+commit, never commit a document with a real author's name in it, and check any write
+against a **copy** of a real document.
+
 ## Verifying a change to these tools
 
-First, the unit tests (stdlib only, no Pages needed; see `tests/PLAN.md`):
+First, the unit tests (stdlib only, no Pages needed; `tests/PLAN.md` lists what is still
+to write and `tests/samples/README.md` the real documents they run against):
 
 ```bash
 python3 -m unittest discover -s tests

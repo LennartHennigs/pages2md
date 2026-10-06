@@ -44,6 +44,11 @@ Add each change here in the same commit that makes it.
   deletions where they overlap.
 - `tests/samples/formatting.pages` (Pages 15.4): a Title, character formatting, a body
   link and a three-level list.
+- `tests/anonymize_author.py`: replaces a name inside a `.pages` file (comment authors)
+  without disturbing anything else, with tests.
+- `CLAUDE.md`: working notes for the repository (architecture, the UTF-16 offset
+  convention, the run-length rule for structural edits, how to find out what a field
+  means, sample privacy, the changelog rule).
 - This changelog.
 
 ### Changed
@@ -81,6 +86,12 @@ Add each change here in the same commit that makes it.
   word edge before it counts as emphasis.
 - Documentation: `insights.md` records the UTF-16 offsets, the footnote marker, and how
   comment tables vary; the README documents footnotes and the offset units.
+- Documentation brought up to date: the README's status note (no write from this branch has
+  been opened in Pages yet), what is editable (footnotes and other storages, not only the
+  body), the fingerprint definition and a development section; `insights.md` gains a table
+  of what a null entry means in each run-length table, the deletion and insertion bugs
+  that came from it, the evidence habits (single-variable samples, built-in style names,
+  the embedded preview image) and a longer "still unproven" list.
 
 ### Fixed
 

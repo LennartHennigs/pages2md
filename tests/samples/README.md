@@ -10,7 +10,9 @@ For every sample:
   (File ▸ Advanced ▸ File Format: Single File), not a package.
 - Copy the real local file, not an iCloud placeholder.
 - Use throwaway text only, because the file is committed. Comments carry your Pages
-  author name.
+  author name: run `python3 tests/anonymize_author.py in.pages out.pages "Your Name"
+  "Sample Author"` and check `pages2md.py --comments out.pages`. Look for your name in
+  the text and in hyperlinks too; the tool does not touch those.
 - Write down your Pages version in the commit message.
 
 ## `emoji.pages` — offset units (review finding 1.6; result: UTF-16)
