@@ -9,6 +9,7 @@ same zip → IWA → archive → storage path as a real document.
 | File | What |
 | --- | --- |
 | `test_codec.py` | varint, protobuf, Snappy, IWA chunking and archive framing round-trips |
+| `test_format.py` | review finding 1.5: `format` produces one clean run, `--plain`, new tables, no re-parse |
 | `test_edit_tables.py` | review findings 1.1–1.4: runs carried across paragraph deletion, inserted text isolated from preceding runs, empty tracked-change spans, comment ranges clamped |
 
 ## Planned
@@ -27,23 +28,12 @@ and the assertion that fails on today's code. **F** = needs a small fixture exte
 - A fake `osascript` on `PATH` (a shell script printing a fixed reply) for the
   Pages-guard and index tests, so they run on Linux CI.
 
-### 1.5 `format`
-
-- **F** `test_bold_over_range_with_inner_italic` — char table `[(0,None),(4,ITALIC),(6,None)]`,
-  bold [2,10) → nothing in (2,10) except the bold opener; value at 5 is BOLD.
-- **F** `test_plain_writes_null_run` — `format --plain` on a bold run removes it;
-  does not exit with "no plain character style".
-- **F** `test_storage_without_char_table` — format creates the table (or refuses
-  clearly) instead of returning success with no change.
-- **F** `test_format_reuses_reader` — patch `PagesDoc.__init__` with a counter;
-  importing 5 emphasis runs parses the document once.
-
 ### 1.6 UTF-16 offsets (needs a real Pages sample first)
 
-- Make a one-line document in Pages: `😀 plain **bold**`, save it into
-  `tests/samples/`. Assert the bold run's table index equals the UTF-16 offset (4),
-  not the code-point offset (3). If it is UTF-16: add `to_utf16`/`from_utf16` index
-  maps and test reading styles and replacing text after an emoji.
+- `test_samples.py` is written and skips until `tests/samples/emoji.pages` exists
+  (recipe in `tests/samples/README.md`). If it reports UTF-16: add index maps
+  between UTF-16 units and Python indices at the table boundary, then test reading
+  styles and replacing text after an emoji.
 
 ### 2 Other bugs
 
