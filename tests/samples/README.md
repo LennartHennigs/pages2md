@@ -27,13 +27,14 @@ each checked offset differs by 2 between the two conventions.
    comment (Insert ▸ Comment) with any text.
 
 `uv run python -m unittest tests.test_samples` then says whether each table counts code
-points or UTF-16 units.
+points or UTF-16 units. The comment author's name was replaced with "Sample Author".
 
 ## `kitchen-sink.pages`
 
 Saved by Pages 15.4. Contains headings 1–3, a bulleted and a numbered list, a footnote
 with a comment, a body comment with a reply, one tracked insertion and one tracked
-deletion, and a long run of body paragraphs, bullets and headings.
+deletion, and a long run of body paragraphs, bullets and headings. The comment author's
+name was replaced with "Sample Author".
 
 Still wanted, in a later sample: a text box with text and a comment, a figure caption,
 a generated table of contents, and bold runs that cross paragraph breaks. For the

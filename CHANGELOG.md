@@ -63,6 +63,8 @@ Add each change here in the same commit that makes it.
 
 ### Changed
 
+- `emoji.pages` and `kitchen-sink.pages`: the comment author is "Sample Author", like in
+  the other samples (`tests/anonymize_author.py`). No other byte of their text changed.
 - `insert --after X` and `import --after X`, when a page break, section break or object
   anchor ends X: the new paragraphs go between X and the break, on X's page, and the break
   ends the last of them. They used to go after the break, onto the next page or after the

@@ -33,4 +33,3 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
 ## Samples wanted
 
 - [ ] `fidelity.pages`: tables, images, nested numbered lists, text boxes.
-- [ ] Replace the real comment author in `emoji.pages` and `kitchen-sink.pages`.
