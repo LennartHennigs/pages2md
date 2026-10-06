@@ -111,6 +111,21 @@ def table_kind(val):
     return None
 
 
+def shift_point(i, start, end, delta):
+    """Where character index `i` lands after [start, end) becomes delta longer.
+
+    Points after the edit move by delta; points inside it are clamped so they
+    never land past the replacement's new end. One rule for both table
+    shapes -- the range shifter used to move only points at or after `end`,
+    so a comment ending inside a shrunk edit quoted the text after it.
+    """
+    if i >= end:
+        return i + delta
+    if i > start:
+        return start + min(i - start, end - start + delta)
+    return i
+
+
 def shift_ranges(val, start, end, delta):
     """Shift a table whose entries carry a {start, length} range.
 
@@ -130,8 +145,8 @@ def shift_ranges(val, start, end, delta):
                 a = read_varint(r[1][0], 0)[0] if 1 in r else 0
                 ln = read_varint(r[2][0], 0)[0] if 2 in r else 0
                 b = a + ln
-                na = a + delta if a >= end else a
-                nb = b + delta if b >= end else b
+                na = shift_point(a, start, end, delta)
+                nb = shift_point(b, start, end, delta)
                 if na != a or nb != b:
                     moved += 1
                 parts = [(1, 0, write_varint(na))]
@@ -172,12 +187,7 @@ def shift_table(val, start, end, delta):
         for num, wire, sub in tokenize(entry):
             if num == 1 and wire == 0:
                 i = read_varint(sub, 0)[0]
-                if i >= end:
-                    j = i + delta
-                elif i > start:
-                    j = start + min(i - start, end - start + delta)
-                else:
-                    j = i
+                j = shift_point(i, start, end, delta)
                 if j != i:
                     moved += 1
                 sub = write_varint(j)
@@ -271,6 +281,42 @@ def set_style_at(val, index, style_id):
     rows.append((index, entry_bytes(index, style_id)))
     rows.sort(key=lambda r: r[0])
     return emit([(1, 2, sub) for _i, sub in rows])
+
+
+def has_entry_at(val, index):
+    return any(i == index for i, _r, _s in entry_rows(val))
+
+
+def carry_run(val, at, value, bound):
+    """Make `value` the value in force at `at` in a run-length table.
+
+    After deleting [start, end), the text that followed the deletion starts
+    at `start` and should keep the value it had at `end`. Dropping the
+    entries inside the deleted span can remove the terminator of a run that
+    began before it, which used to let that run -- bold, a tracked deletion
+    -- bleed on into the text that followed.
+    """
+    if at >= bound or has_entry_at(val, at) or char_value_at(val, at) == value:
+        return val
+    return set_style_at(val, at, value)
+
+
+def isolate_insertion(val, at, length, bound):
+    """Keep `length` characters just inserted at `at` out of the preceding run.
+
+    shift_table moves the entry at `at` forward, so new text takes whatever
+    value was in force just before it. For a run table that would put a new
+    paragraph inside the bold run or the tracked change that precedes it.
+    Close the run at `at` and, when the text after the insertion relied on
+    the same run, re-open it there.
+    """
+    prev = char_value_at(val, at)
+    if prev is None or length <= 0:
+        return val
+    after = at + length
+    if after < bound and not has_entry_at(val, after):
+        val = set_style_at(val, after, prev)
+    return set_style_at(val, at, None)
 
 
 def drop_entries_in(val, start, end):
@@ -412,14 +458,19 @@ def put_span(val, start, end, archive_id):
     Emitting canonical boundaries rather than editing entries in place keeps
     the table's meaning exactly what `spans_of` says it is, with no dangling
     leftovers to misinterpret later.
+
+    An empty span changes nothing. Writing one anyway left an opener with no
+    closer, and the "change" ran on to whatever entry came next.
     """
+    if end <= start:
+        return val
     for a, b, _r in spans_of(val):
-        if a < start and end < b:
+        if a < end and start < b:
             sys.exit(
-                f"the text at {start}-{end} sits inside an existing tracked "
-                f"change ({a}-{b}); recording a change within a change would "
-                "silently un-mark the rest of it. Resolve that change in "
-                "Pages first, or edit with --no-track.")
+                f"the text at {start}-{end} overlaps an existing tracked "
+                f"change ({a}-{b}); recording a change across another would "
+                "silently re-attribute or un-mark part of it. Resolve that "
+                "change in Pages first, or edit with --no-track.")
     spans = spans_of(val) + [(start, end, archive_id)]
     marks = {}
     for _a, b, _r in spans:
@@ -821,8 +872,8 @@ class Document:
         """
         removed = 0
         for start in reversed(self.paragraph_starts(lo, hi)):
-            self.delete_paragraph(start)
-            removed += 1
+            if self.delete_paragraph(start)[1]:
+                removed += 1
         return removed
 
     def insert_paragraph(self, at, text, style_id=None, list_id=None):
@@ -852,6 +903,9 @@ class Document:
                     # what was in force before the insertion
                     val = self._restate_following(val, at + delta, keep,
                                                   len(raw) + delta)
+                elif num in RUN_TABLES and table_kind(val) == "index":
+                    # a new paragraph starts plain and outside any change
+                    val = isolate_insertion(val, at, delta, len(raw) + delta)
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
         self._write_text(raw[:at] + body + raw[at:])
@@ -864,17 +918,29 @@ class Document:
         start, end = para_bounds(raw, offset)
         if raw[end:end + 1] == PARA_END:    # its own terminator, not the
             end += 1                        # next paragraph's leading break
+        if end == start:
+            # The empty slot PARA_SPLIT yields just before a page break or
+            # anchor: nothing to delete. Carrying on would still write a
+            # style entry onto the break character itself.
+            return start, 0
         delta = -(end - start)
+        bound = len(raw) + delta
         rebuilt = []
         for num, wire, val in tokenize(self._msg):
             if num != F_TEXT and wire == 2:
                 # the next paragraph may inherit from the one being removed,
-                # so pin it to what it resolves to today
-                keep = (effective_style_at(val, end)
-                        if num == F_PARA_TBL else None)
+                # so pin it to what it resolves to today -- its list style as
+                # much as its paragraph style
+                styled = num in (F_PARA_TBL, F_LIST_TBL)
+                keep = effective_style_at(val, end) if styled else None
+                run = num in RUN_TABLES and table_kind(val) == "index"
+                carry = char_value_at(val, end) if run else None
                 val = drop_entries_in(val, start, end)
                 val, _n = shift_table(val, start, end, delta)
-                val = self._restate_following(val, start, keep, len(raw))
+                if styled:
+                    val = self._restate_following(val, start, keep, bound)
+                elif run:
+                    val = carry_run(val, start, carry, bound)
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
         self._write_text(raw[:start] + raw[end:])
@@ -958,6 +1024,10 @@ class Document:
                     rebuilt.append((num, wire, val))
                     continue
                 val, n = shift_table(val, start, end, delta)
+                if (start == end and num in CHANGE_TABLES
+                        and table_kind(val) == "index"):
+                    # untracked text typed at a change's edge is not part of it
+                    val = isolate_insertion(val, start, delta, len(raw))
                 moved += n
                 rebuilt.append((num, wire, val))
             self._msg = emit(rebuilt)
@@ -979,8 +1049,11 @@ class Document:
         report = []
         for start, end, new in sorted(edits, reverse=True):
             delta = len(new)
-            del_id = self.new_change(2)
-            ins_id = self.new_change(1)
+            # a pure deletion inserts nothing and a pure insertion deletes
+            # nothing; minting a change for the empty side produced an
+            # unterminated span that marked unrelated text
+            del_id = self.new_change(2) if end > start else None
+            ins_id = self.new_change(1) if delta else None
             moved = 0
             rebuilt = []
             seen = set()
@@ -990,6 +1063,10 @@ class Document:
                     continue
                 val, n = shift_table(val, end, end, delta)   # pure insertion
                 moved += n
+                if num in CHANGE_TABLES and table_kind(val) == "index":
+                    # the new text belongs to this edit's insertion only, not
+                    # to a change that happens to end where it goes
+                    val = isolate_insertion(val, end, delta, len(raw) + delta)
                 if num == F_DELETIONS:
                     val = put_span(val, start, end, del_id)
                     seen.add(num)
@@ -1004,7 +1081,7 @@ class Document:
             # is never marked deleted, so both end up visible.
             for num, span in ((F_DELETIONS, (start, end, del_id)),
                               (F_INSERTIONS, (end, end + delta, ins_id))):
-                if num in seen:
+                if num in seen or span[2] is None:
                     continue
                 token = (num, 2, put_span(None, *span))
                 at = next((i for i, (n2, _w, _v) in enumerate(rebuilt)
@@ -1055,6 +1132,13 @@ from pages2md import (outline, section_range, index_path, load_index,
                       C_TEXT, C_DATE, C_AUTHOR, C_NEXT, APPLE_EPOCH,
                       PARA_BREAKS, PARA_SPLIT)
 from pages2md import _ref as ref_of   # skip a TSP.Reference's tag byte, read the varint
+
+# Run-length tables of references where a null entry means "no value from
+# here": the run in force is exactly what the entries say, so a structural
+# edit has to carry it explicitly. Paragraph and list styles are the other
+# kind (null = "no change") and get _restate_following instead.
+RUN_TABLES = (F_CHAR_TBL, F_INSERTIONS, F_DELETIONS)
+CHANGE_TABLES = (F_INSERTIONS, F_DELETIONS)
 
 
 # ------------------------------------------------------ fingerprint and plans

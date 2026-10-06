@@ -541,6 +541,17 @@ limit, or chaining many `delete-paragraph` calls in one write, is not supported 
 this is root-caused. A `clear_range` helper exists for a future investigation but should
 not be called directly. Issue reports with a reproduction are very welcome.
 
+**A lead, not yet confirmed in Pages.** `drop_entries_in` used to drop every entry
+inside the deleted paragraph, including the *terminator* of a run that started before
+it. In a run-length table (character styles, tracked changes) the run then continued
+until the next entry anywhere in the document -- a character style bleeding over every
+later heading would look exactly like the symptom above, and more deletions make it more
+likely that one of them removes such a terminator. `delete_paragraph` now carries the
+run in force at the end of the deleted span back to its start, and re-states the
+following paragraph's list style as well as its paragraph style
+(`tests/test_edit_tables.py`). The 3-paragraph limit stays until a real Pages
+round-trip confirms this was the cause.
+
 One operational note from chasing this live: repeated open/save/close cycles against
 Pages during testing left the application itself sluggish — later AppleEvents timed out
 independent of any file corruption, and a `save`/`close` pair that appeared hung had in

@@ -558,7 +558,13 @@ open an issue if you can reproduce or root-cause it.
 
 ## Verifying a change to these tools
 
-Three checks, in increasing order of authority:
+First, the unit tests (stdlib only, no Pages needed; see `tests/PLAN.md`):
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+Then three checks against a real document, in increasing order of authority:
 
 ```bash
 # 1. every IWA layer still round-trips byte-for-byte
