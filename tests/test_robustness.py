@@ -211,10 +211,6 @@ class MessagesNotTracebacks(Base):
         self.assertIn("/nonexistent/i.md", msg)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class NoteNaming(unittest.TestCase):
     PATH = os.path.join(HERE, "samples", "formatting.pages")
 
@@ -233,6 +229,52 @@ class NoteNaming(unittest.TestCase):
         paras = json.loads(self.reader("-t", "json", "--notes", "only"))
         paras = paras["paragraphs"] if isinstance(paras, dict) else paras
         self.assertTrue(paras and all(p["note"] is not None and "sidenote" not in p for p in paras))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class FirstCommentInADocumentWithNone(unittest.TestCase):
+    """The author came from an existing comment, so a document without one was stuck."""
+
+    def test_the_author_archive_is_used_when_no_comment_exists(self):
+        from fixture import write_pages, table, F_PARA_TBL
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_pages(os.path.join(tmp, "t.pages"), "Some text here\n",
+                               {F_PARA_TBL: table([(0, 1)])},
+                               extra=[(777, P.T_AUTHOR, emit([(1, 2, b"Someone")]))])
+            doc = E.Document(path)
+            self.assertEqual(doc.author_id(), 777)
+            msg, out = cli("comment", "add", "--on", "text", "--text", "First!", "--write",
+                           "--no-backup", path)
+            self.assertIsNone(msg, out)
+            (c,) = P.PagesDoc(path).comments()
+            self.assertEqual((c["quote"], [m["text"] for m in c["thread"]]), ("text", ["First!"]))
+            self.assertEqual(E.table_problems(E.Document(path)), [])
+
+    def test_still_a_clear_message_with_no_author_at_all(self):
+        from fixture import write_pages, table, F_PARA_TBL
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_pages(os.path.join(tmp, "t.pages"), "Some text here\n",
+                               {F_PARA_TBL: table([(0, 1)])})
+            msg, _ = cli("comment", "add", "--on", "text", "--text", "x", "--write", path)
+            self.assertIn("no annotation author", msg)
+
+    def test_on_a_real_document_whose_comments_were_all_deleted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "d.pages")
+            shutil.copy(SAMPLE, path)
+            for on in ("Body", "about"):
+                msg, _ = cli("comment", "delete", "--on", on, "--write", "--no-backup", path)
+                self.assertIsNone(msg)
+            self.assertEqual(P.PagesDoc(path).comments(), [])
+            msg, _ = cli("comment", "add", "--on", "aliquip", "--text", "Again", "--write",
+                         "--no-backup", path)
+            self.assertIsNone(msg)
+            (c,) = P.PagesDoc(path).comments()
+            self.assertEqual(c["thread"][0]["text"], "Again")
+            self.assertEqual(E.table_problems(E.Document(path)), [])
 
 
 if __name__ == "__main__":

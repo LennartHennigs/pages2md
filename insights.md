@@ -631,6 +631,10 @@ With the setting off, a plain `.bak` is written instead. Both belong in `.gitign
 - The meaning of a list's start-at value, of the restart table's `second` field, and what
   Pages does to restarts when the first item of a numbered list is deleted are unknown.
 - Whether a `\x0e` without an attachment entry is a section break has not been seen.
+- `comment add` in a document with no comment takes the author from the annotation author
+  archive (type 212, in `AnnotationAuthorStorage-*.iwa`; all four samples have exactly one,
+  next to a type 213 archive of 6 bytes). Only tested on a synthetic file: a Pages document
+  that never had a comment may not have that archive at all, and then the command says so.
 - A paragraph that holds a footnote reference cannot be deleted: its note's storage and
   archives (and any comment in it) would stay in the file unreferenced, and no document
   like that has been opened in Pages. The tools refuse instead (`delete-paragraph`,

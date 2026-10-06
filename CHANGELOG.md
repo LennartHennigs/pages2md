@@ -133,6 +133,9 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- `comment add` works in a document that has no comment yet: the author is taken from the
+  document's annotation author when there is no existing comment to copy it from. (Untested
+  in Pages: no sample without any comment exists; see `insights.md`, "Still unproven".)
 - Deleting the last paragraph, or one that a page break or object anchor ends, left an empty
   paragraph behind (the previous paragraph's newline in front of nothing). That newline
   goes with it now.

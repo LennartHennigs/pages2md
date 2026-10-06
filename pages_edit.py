@@ -678,7 +678,9 @@ class Document:
 
         Taken from an existing comment rather than looked up: the author
         archive lives in AnnotationAuthorStorage.iwa, which this class never
-        loads -- but the id it references is all a new comment needs.
+        loads -- but the id it references is all a new comment needs. A document
+        whose comments were all deleted still has its author archive: with no comment to
+        copy from, the first one of those is used.
         """
         for ident, (ai, mi, t) in self.by_id.items():
             if t != T_COMMENT:
@@ -686,8 +688,11 @@ class Document:
             c = parse_fields_of(self.arcs[ai][1][mi][1])
             if C_AUTHOR in c:
                 return ref_of(c[C_AUTHOR][0])
-        sys.exit("this document has no comment to take an author from; "
-                 "add one in Pages first")
+        for ident, (mtype, _msg, _src) in self.reader.arcs.items():
+            if mtype == T_AUTHOR:
+                return ident
+        sys.exit("this document has no comment and no annotation author to attribute "
+                 "one to; add a comment in Pages first")
 
     def comment_field(self):
         """Which field holds this storage's comments, and how it is keyed.
@@ -1271,7 +1276,7 @@ from pages2md import (outline, section_range, index_path, load_index,
                       text_fingerprint,
                       build_index, page_of, page_range, pages_has_open,
                       style_ids, list_style_ids,
-                      char_style_ids, package_errors,
+                      char_style_ids, package_errors, T_AUTHOR,
                       # one definition of the reverse-engineered field numbers:
                       # two tables that must agree is the worst failure mode
                       # this codebase has (reads fine, writes corrupt)

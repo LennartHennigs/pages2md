@@ -18,7 +18,8 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
       Pages has been shown a file like that.
 - [ ] The empty paragraph after a final newline inherits its predecessor's style and list
       level (retag, insert at the end). Needs a look at what Pages does.
-- [ ] A first comment is impossible in a document that has none yet.
+- [ ] Get a Pages document that never had a comment, to see whether it has an annotation
+      author archive (`comment add` relies on one when no comment exists).
 
 ## Features
 

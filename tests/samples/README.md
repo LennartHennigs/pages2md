@@ -55,6 +55,12 @@ formatting (italic, bold italic struck through, bold italic underlined, plain un
 a hyperlink in the body text (`http://google.de`), and a bulleted list nested three
 levels deep (This, then Is and A bulleted one level in, then list two levels in).
 
+## Wanted: `no-comments.pages`
+
+Any short document that **never had a comment** (not one added and then deleted): it tells
+whether Pages writes an annotation author archive before the first comment, which
+`comment add` relies on.
+
 ## Wanted: `fidelity.pages`
 
 What would let `pages2md.py` cover the rows of README ▸ *Not considered yet*. One document,
