@@ -591,10 +591,8 @@ class PagesDoc:
                 links.append((max(a, pos) - pos, min(b, pos + len(raw)) - pos, url))
             if drop:
                 keep = [k for k in range(len(raw)) if pos + k not in drop]
-                remap = {len(raw): len(keep)}
-                remap.update((old, new) for new, old in enumerate(keep))
                 raw = "".join(raw[k] for k in keep)
-                runs, links = (_squeeze(runs, keep, remap), _squeeze(links, keep, remap))
+                runs, links = _squeeze(runs, keep), _squeeze(links, keep)
             struck = []
             if marks:
                 # bisect the span *ends* so a long span starting far back is
@@ -1002,12 +1000,11 @@ def flow_view(text, marks):
     return "".join(out) + text[prev:]
 
 
-def _squeeze(spans, keep, remap):
+def _squeeze(spans, keep):
     """Move (start, end, ...) spans onto text that lost the characters not in `keep`."""
     out = []
     for s, e, *rest in spans:
-        ns = remap.get(s, bisect.bisect_left(keep, s))
-        ne = remap.get(e, bisect.bisect_left(keep, e))
+        ns, ne = bisect.bisect_left(keep, s), bisect.bisect_left(keep, e)
         if ne > ns:
             out.append((ns, ne, *rest))
     return out

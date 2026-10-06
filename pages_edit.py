@@ -183,89 +183,64 @@ def last_per_index(val):
 
 
 def scan_index_entries(val):
-    """[(index, entry start, payload start, end of the index varint, entry end)] or None.
+    """[(index, entry start, end of the index varint, entry end)] of a plain index table.
 
-    A byte-level walk of an index-keyed table (entries `0a len 08 <index> ...`). None when
-    the bytes are anything else -- empty, range-keyed, malformed -- so callers fall back to
-    the general tokenizer. It exists because shifting a table per edit was the cost of
-    `apply`: this reads each entry once, without building tokens.
+    A byte-level walk (entries `0a len 08 <index> ...`) that builds no tokens; `entry_rows`
+    is the general walker. None for anything else -- empty, range-keyed, malformed.
     """
     out, pos, n = [], 0, len(val)
     try:
         while pos < n:
             if val[pos] != 0x0A:
                 return None
-            p = pos + 1
-            b = val[p]
-            ln, sh = b & 0x7F, 7
-            while b & 0x80:
-                p += 1
-                b = val[p]
-                ln |= (b & 0x7F) << sh
-                sh += 7
-            p += 1
-            end = p + ln
-            if ln == 0 or end > n or val[p] != 0x08:
+            ln, p = read_varint(val, pos + 1)
+            if ln == 0 or p + ln > n or val[p] != 0x08:
                 return None
-            q = p + 1
-            b = val[q]
-            idx, sh = b & 0x7F, 7
-            while b & 0x80:
-                q += 1
-                b = val[q]
-                idx |= (b & 0x7F) << sh
-                sh += 7
-            out.append((idx, pos, p, q + 1, end))
-            pos = end
+            idx, q = read_varint(val, p + 1)
+            out.append((idx, pos, q, p + ln))
+            pos = p + ln
     except IndexError:
         return None
     return out or None
 
 
-def _shift_index_fast(val, start, end, delta):
-    """`shift_table` for a plain index-keyed table, or None to use the general path.
+def _reindexed(val, j, after_idx, stop):
+    """One table entry with its index replaced by `j`; the rest of it is copied."""
+    body = b"\x08" + write_varint(j) + val[after_idx:stop]
+    return b"\x0a" + write_varint(len(body)) + body
 
-    Same bytes as the general path (see `_shift_table_slow`): untouched entries are copied
-    as slices, only the ones that move are re-encoded.
+
+def _shift_index_fast(val, start, end, delta):
+    """`shift_table` for a plain index-keyed table, or None for the general path.
+
+    Untouched entries are copied as slices; only the ones that move are re-encoded.
     """
     entries = scan_index_entries(val)
     if entries is None:
         return None
     parts, run, moved, prev, ordered = [], 0, 0, -1, True
-    for idx, pos, pay, after_idx, stop in entries:
-        # shift_point, inlined: this loop runs once per entry per edit
-        if idx >= end:
-            j = idx + delta
-        elif idx > start:
-            j = start + min(idx - start, end - start + delta)
-        else:
-            j = idx
+    for idx, pos, after_idx, stop in entries:
+        j = shift_point(idx, start, end, delta)
         if j <= prev:
-            ordered = False                  # a duplicate, or not ascending: check below
+            ordered = False                  # a duplicate, or not ascending
         prev = j
-        if j == idx:
-            continue
-        moved += 1
-        parts.append(val[run:pos])
-        vb = (bytes((j,)) if j < 0x80 else
-              bytes((j & 0x7F | 0x80, j >> 7)) if j < 0x4000 else write_varint(j))
-        body = b"\x08" + vb + val[after_idx:stop]
-        n = len(body)
-        parts.append((b"\x0a" + bytes((n,)) if n < 0x80 else b"\x0a" + write_varint(n)) + body)
-        run = stop
+        if j != idx:
+            moved += 1
+            parts += (val[run:pos], _reindexed(val, j, after_idx, stop))
+            run = stop
     parts.append(val[run:])
     out = b"".join(parts)
     return (out if ordered else last_per_index(out)), moved
 
 
 def shift_table_batch(val, edits):
-    """Apply several non-overlapping edits `[(start, end, new_text)]` (ascending) to a plain
-    index table in one pass; -> (bytes, entries moved per edit, ascending) or None.
+    """Apply non-overlapping `edits` [(start, end, new_text)], ascending, to a plain index
+    table in one pass: -> (bytes, entries moved per edit, ascending), or None.
 
-    The result is what shifting after each edit, right to left, gives. An entry at `i` moves
-    by the delta of every edit whose end is at or before `i`; one strictly inside an edit is
-    first clamped to it (`shift_point`). None for anything but a plain index table, or one
-    that is not in ascending order (the general path handles duplicates and order).
+    Same result as shifting after each edit right to left: an entry moves by the delta of
+    every edit that ends at or before it, and one strictly inside an edit is clamped first
+    (`shift_point`). None when the table is not a plain, ascending index table or two
+    entries collapse onto one index; the one-edit-at-a-time path handles those.
     """
     entries = scan_index_entries(val)
     if entries is None:
@@ -273,50 +248,41 @@ def shift_table_batch(val, edits):
     starts = [e[0] for e in edits]
     ends = [e[1] for e in edits]
     deltas = [len(e[2]) - (e[1] - e[0]) for e in edits]
-    prefix, changed = [0], [0]
+    prefix = [0]
     for d in deltas:
         prefix.append(prefix[-1] + d)
-        changed.append(changed[-1] + (1 if d else 0))
-    # entries strictly inside an edit are clamped, and an entry at or after an edit's end
-    # moves at that step whenever its delta is not zero
     per_edit = [0] * len(edits)
-    sorted_idx = [e[0] for e in entries]
-    if any(b < a for a, b in zip(sorted_idx, sorted_idx[1:])):
-        return None
-    parts, run, prev, ordered = [], 0, -1, True
-    for idx, pos, pay, after_idx, stop in entries:
+    parts, run, prev, prev_idx = [], 0, -1, -1
+    for idx, pos, after_idx, stop in entries:
+        if idx < prev_idx:
+            return None
+        prev_idx = idx
         cnt = bisect.bisect_right(ends, idx)         # edits that end at or before idx
-        j = idx + prefix[cnt]
-        if cnt < len(edits) and starts[cnt] < idx:   # idx lies strictly inside edit `cnt`
-            j = starts[cnt] + min(idx - starts[cnt], ends[cnt] - starts[cnt] + deltas[cnt]) + prefix[cnt]
-            if j - prefix[cnt] != idx:
+        base = idx
+        if cnt < len(edits) and starts[cnt] < idx:   # strictly inside edit `cnt`: clamp
+            base = shift_point(idx, starts[cnt], ends[cnt], deltas[cnt])
+            if base != idx:
                 per_edit[cnt] += 1
+        j = base + prefix[cnt]
         if j <= prev:
-            return None                              # collapsed or duplicate: general path
+            return None
         prev = j
-        if j == idx:
-            continue
-        parts.append(val[run:pos])
-        vb = (bytes((j,)) if j < 0x80 else
-              bytes((j & 0x7F | 0x80, j >> 7)) if j < 0x4000 else write_varint(j))
-        body = b"\x08" + vb + val[after_idx:stop]
-        n = len(body)
-        parts.append((b"\x0a" + bytes((n,)) if n < 0x80 else b"\x0a" + write_varint(n)) + body)
-        run = stop
+        if j != idx:
+            parts += (val[run:pos], _reindexed(val, j, after_idx, stop))
+            run = stop
     parts.append(val[run:])
-    # entries moved at each edit's step: those at or after its end, if it changes the length
-    for k in range(len(edits)):
-        if deltas[k]:
-            per_edit[k] += len(entries) - bisect.bisect_left(sorted_idx, ends[k])
+    # every entry at or after an edit's end moves at that step, if the edit changes length
+    indexes = [e[0] for e in entries]
+    for k, d in enumerate(deltas):
+        if d:
+            per_edit[k] += len(indexes) - bisect.bisect_left(indexes, ends[k])
     return b"".join(parts), per_edit
 
 
 def shift_table(val, start, end, delta):
     """Rewrite the character index of every entry in one attribute table."""
-    fast = _shift_index_fast(val, start, end, delta)
-    if fast is not None:
-        return fast
-    return _shift_table_slow(val, start, end, delta)
+    return (_shift_index_fast(val, start, end, delta)
+            or _shift_table_slow(val, start, end, delta))
 
 
 def _shift_table_slow(val, start, end, delta):
@@ -673,12 +639,8 @@ def put_span(val, start, end, archive_id):
 
 # ------------------------------------------------------------------- document
 class PackageEntries(dict):
-    """The package's files by name. The IWA files are read up front; the rest (images,
-    previews, the plists) only when something asks for them, which is `save` copying them.
-
-    A file that changed on disk between loading and that read would give a mixed
-    package, so it is checked and refused.
-    """
+    """The package's files by name: the IWA files up front, the rest (images, previews)
+    when `save` copies them. A package that changed on disk in between is refused."""
 
     def __init__(self, path, names):
         super().__init__()
@@ -686,16 +648,24 @@ class PackageEntries(dict):
         st = os.stat(path)
         self._stamp = (st.st_size, st.st_mtime_ns)
 
-    def __missing__(self, name):
-        if name not in self._names:
-            raise KeyError(name)
+    def load_rest(self):
+        """Read every file not read yet, in one pass over the zip."""
+        todo = [n for n in self._names if n not in self]
+        if not todo:
+            return
         st = os.stat(self._path)
         if (st.st_size, st.st_mtime_ns) != self._stamp:
             sys.exit(f"{self._path} changed on disk after it was loaded; nothing was written. "
                      "Run the command again.")
         with zipfile.ZipFile(self._path) as z:
-            data = self[name] = z.read(name)
-        return data
+            for n in todo:
+                self[n] = z.read(n)
+
+    def __missing__(self, name):
+        if name not in self._names:
+            raise KeyError(name)
+        self.load_rest()
+        return self[name]
 
 
 class Document:
@@ -739,10 +709,10 @@ class Document:
         reader = pages2md.PagesDoc(path)
         self.reader = reader              # reused by callers that need style/list lookups
         # the reader decides which storage is the body; the editor only finds it again
-        if reader._body_id() not in self.by_id:
+        body_id = reader._body_id()
+        if body_id not in self.by_id:
             sys.exit(f"{path}: the body text is not in {BODY_ENTRY}; not supported")
-        ai, mi, _t = self.by_id[reader._body_id()]
-        self.slot = (ai, mi)
+        self.slot = self.by_id[body_id][:2]
         self.slots, self.anchors = {}, {}
         for handle, sid, anchor, kind in reader.storages():
             if kind == "toc" or sid is None or sid not in self.by_id:
@@ -1103,17 +1073,17 @@ class Document:
         if self._flow_cache and self._flow_cache[0] is msg:
             return self._flow_cache[1]
         raw = self.text()[0] if raw is None else raw
-        val = parse_fields_of(msg).get(F_ATTACHMENTS, [None])[0]
-        rows = [(i, ref) for i, ref, _s in entry_rows(val)]
-        flow = flow_view(raw, footnote_marks(rows, raw))
+        flow = flow_view(raw, self._footnote_marks(raw))
         self._flow_cache = (msg, flow)
         return flow
 
+    def _footnote_marks(self, raw):
+        val = parse_fields_of(self._msg).get(F_ATTACHMENTS, [None])[0]
+        return footnote_marks([(i, ref) for i, ref, _s in entry_rows(val)], raw)
+
     def footnote_refs(self, lo, hi):
         """Offsets of footnote references inside [lo, hi) of the selected storage."""
-        raw, flow = self.text()[0], self.flow()
-        return [i for i in range(lo, min(hi, len(raw)))
-                if raw[i] == "\x0e" and flow[i] != raw[i]]
+        return sorted(i for i in self._footnote_marks(self.text()[0]) if lo <= i < hi)
 
     def require_no_footnotes(self, lo, hi, what):
         """Refuse to remove text that holds a footnote reference.
@@ -1324,9 +1294,11 @@ class Document:
         if chunks != 1:
             sys.exit(f"{self.path}: body text is split across {chunks} chunks; "
                      "not supported")
+        if len(edits) < 2:
+            return self._apply_sequential(edits)
         descending = [minimal_edit(raw, s, e, n) for s, e, n in sorted(edits, reverse=True)]
         ascending = descending[::-1]
-        if len(ascending) < 2 or any(a[1] > b[0] for a, b in zip(ascending, ascending[1:])):
+        if any(a[1] > b[0] for a, b in zip(ascending, ascending[1:])):
             return self._apply_sequential(edits)
         deltas = [len(n) - (e - s) for s, e, n in descending]
         lengths, size = [], len(raw)          # text length after each step, right to left
@@ -1467,6 +1439,7 @@ class Document:
         write that produced an ill-formed table once left a document that
         pages2md could not open, while the editor's own re-read said "OK".
         """
+        self.entries.load_rest()
         payload = pack_archives(self.arcs)
         self.entries[BODY_ENTRY] = iwa_encode(payload)
         tmp = out_path + ".tmp"
@@ -1784,13 +1757,13 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
         rx = re.compile(pattern if regex else re.escape(pattern), re.MULTILINE)
     except re.error as exc:
         sys.exit(f"invalid regular expression {show(pattern)!r}: {exc}")
-    out = []
+    out, raw_len = [], len(doc.text()[0])
     for h in rx.finditer(hay.translate(SEARCH_VIEW)):
         s, e = h.start(), h.end()
         if keep is None:
             rs, re_ = s, e
         elif e == s:                       # zero-width: an insertion point
-            rs = re_ = keep[s] if s < len(keep) else len(doc.text()[0])
+            rs = re_ = keep[s] if s < len(keep) else raw_len
         else:
             rs, re_ = keep[s], keep[e - 1] + 1
         if scope:
@@ -2035,7 +2008,6 @@ def cmd_replace(args):
         print("\ndry run — pass --write to apply")
         return
 
-    check_fingerprint(doc, args.expect, "you took that fingerprint")
     # Pages writes the whole package on its next save, which would silently
     # discard this edit. Refuse rather than lose work.
     if pages_has_open(args.file):
