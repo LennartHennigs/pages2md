@@ -254,8 +254,14 @@ PARA_END = "\n"
 
 
 def after_paragraph(raw, end):
-    """Where a new paragraph goes when inserted after one ending at `end`."""
-    return min(end + 1, len(raw)) if raw[end:end + 1] == PARA_END else end
+    """Where a new paragraph goes when inserted after one ending at `end`.
+
+    Past whatever ends the paragraph: a newline, or a break character (page break,
+    object anchor, section break) that leads the next one. Stopping short of a break
+    character left it right behind the new text, where it started an empty paragraph
+    of its own.
+    """
+    return end + 1 if raw[end:end + 1] and raw[end] in PARA_BREAKS else end
 
 
 def para_bounds(raw, offset):
@@ -971,7 +977,11 @@ class Document:
         text = u16(text)
         # at the very end there may be no terminator to insert after, so the
         # new text would run on into the last paragraph
-        lead = "" if (at == 0 or raw[at - 1:at] in (PARA_END, "")) else PARA_END
+        # `at` follows a paragraph separator -- a newline or any break character, but not a
+        # footnote reference, which sits inside a sentence -- so no newline is needed
+        # before the new text; with one added, the break character started an empty
+        # paragraph of its own
+        lead = "" if (at == 0 or self.flow(raw)[at - 1] in PARA_BREAKS) else PARA_END
         body = lead + text + PARA_END
         delta = len(body)
         rebuilt = []

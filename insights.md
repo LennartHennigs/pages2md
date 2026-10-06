@@ -130,6 +130,16 @@ Also present: `U+2028` (line separator) inside headings that wrap across two lin
 original layout, and `U+FFFC` (object replacement character) as an inline object
 placeholder.
 
+Treat these characters as **separators**, like the newline. A new paragraph goes between two
+paragraphs; if the separator between them is a break character, it already ends the text
+before it, and adding a newline as well leaves an empty paragraph between the new text and
+the break. So `insert_paragraph` adds a leading newline only when the character before the
+insertion point is not a separator, and `after_paragraph` steps over whatever ends the
+paragraph. A `\x0e` that is a footnote reference is the one break character that is not a
+separator (see below). Where the break character ends up -- leading the new paragraph or the
+one that follows -- is a guess: no sample shows what Pages does with an anchor in front of a
+paragraph that was inserted before.
+
 ### Tracked changes are the real correctness issue
 
 The storage holds the original *and* the revision, unmarked. Raw extraction produces

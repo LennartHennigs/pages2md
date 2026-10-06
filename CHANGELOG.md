@@ -151,6 +151,14 @@ Add each change here in the same commit that makes it.
 - The Markdown importer turned `my_var_name` into italic `myvarname`.
 - **Underline was read from the wrong style property** (10, which only a footnote reference
   sets); it is 11. The JSON `runs` underline flag is now right.
+- **Inserting before (or, next to an anchor, after) a paragraph added a spurious empty paragraph.**
+  Pages leads some paragraphs with a page break, object anchor or section break, and
+  `insert_paragraph` only counted a newline as "already at a paragraph start", so
+  `insert --before "What It Is"` (and `import --before`) in a real document put an extra newline
+  after the anchor and left an empty paragraph behind; `--after` did the same when a break
+  character, not a newline, followed the paragraph. Every break character now counts as a
+  separator. A footnote reference still does not (it sits inside a sentence). Found by random
+  insertions on the real guide.
 - **An empty search text destroyed the document.** `replace -f "" -r X --all --write` wrote `X`
   between every character (3638 insertions into a 3622-character document: "Titel" became
   "XTXiXtXeXlX"); a plan entry with `"find": ""` did the same. An empty search text is now refused

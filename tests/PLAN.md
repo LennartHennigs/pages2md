@@ -19,6 +19,7 @@ same zip → IWA → archive → storage path as a real document.
 | `test_roundtrip_harness.py` | the Pages round-trip harness against a stand-in Pages: all cases prepared and readable, identity passes, a lost edit / lost headings / missing file / timeout / growing page count are caught |
 | `test_table_integrity.py` | tables stay sorted, one entry per index and inside the text after any edit (collapsed runs, tracked changes, comments, paragraph styles); the reader tolerates duplicates; `save` refuses ill-formed output; `verify` reads with the reader; seeded random replacements on every sample |
 | `test_search_text.py` | an empty search text is refused by every command that takes one, nothing is written; plan entries must hold strings; `^`, `$`, `\\b` still work |
+| `test_insert_boundaries.py` | inserting before or after a paragraph led or followed by `\\x04`/`\\x05`/`\\x0e` adds exactly one paragraph (unit cases, and `insert`/`import --before` on the real guide); a footnote reference is not a boundary |
 | `test_guard.py` | the Pages-open guard does not crash without `osascript` |
 | `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 
@@ -37,6 +38,14 @@ and the assertion that fails on today's code. **F** = needs a small fixture exte
   comment chain, so reader and editor tests share one setup.
 - A fake `osascript` on `PATH` (a shell script printing a fixed reply) for the
   Pages-guard and index tests, so they run on Linux CI.
+
+### Not fixed yet (found by the same random edits)
+
+- Deleting the last paragraph, or one directly followed by a break character, leaves an empty
+  paragraph behind: it has no newline of its own to remove, so the one *before* it should go.
+- The empty paragraph at the end of the text inherits the style or list level of the one before it
+  (retag, insert at the end, delete the last paragraph); no entry is written at the very end.
+- Deleting a paragraph that holds a footnote reference leaves the footnote's storage behind.
 
 ### Waiting for a real Pages
 

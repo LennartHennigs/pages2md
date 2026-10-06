@@ -100,6 +100,14 @@ def import_markdown(path):
     os.remove(md)
 
 
+def import_before_heading(path):
+    md = os.path.join(os.path.dirname(path), "import-" + os.path.basename(path) + ".md")
+    with open(md, "w", encoding="utf-8") as fh:
+        fh.write("## Imported heading\n\nOne paragraph.\n")
+    cli(path, "import", md, "--before", "What It Is")
+    os.remove(md)
+
+
 F, K, S, EM = "formatting", "kitchen-sink", "sample-content", "emoji"
 Case = collections.namedtuple("Case", "name sample kind mutate what look")
 CASES = [
@@ -121,6 +129,12 @@ CASES = [
          "insert a paragraph after bold text", "the new paragraph is plain, not bold"),
     Case("import-markdown", S, "edit", import_markdown,
          "import a heading, emphasis and bullets", "a Heading 2, a bold/italic line, two bullets"),
+    Case("insert-before-anchored-heading", S, "edit",
+         lambda p: cli(p, "insert", "--before", "What It Is", "--text", "Inserted before the heading.", "--style", "Body 1"),
+         "insert before a heading that an object anchor leads",
+         "one new paragraph before 'What It Is', no empty paragraph, the heading still a Heading 2"),
+    Case("import-before-anchored-heading", S, "edit", import_before_heading,
+         "import before a heading that an object anchor leads", "two new paragraphs, no empty one"),
     Case("retag", S, "edit", lambda p: cli(p, "retag", "--on", "What It Is", "--style", "Heading 3"),
          "change a heading's style", "'What It Is' is a Heading 3"),
     Case("format-bold", F, "edit", lambda p: cli(p, "format", "--on", "Nemo enim", "--bold"),
