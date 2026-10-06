@@ -51,8 +51,7 @@ class SameBytesAsTheGeneralPath(unittest.TestCase):
                             (2, 2, b"\x0a\x01\x05")])
         for val in (b"", b"\x0a\x00", b"\x0a\x05\x08", emit([(1, 2, range_entry)]),
                     emit([(2, 2, b"x")]), b"\xff\xff"):
-            if val != emit([(1, 2, range_entry)]):
-                self.assertIsNone(E._shift_index_fast(val, 3, 5, 2))
+            self.assertIsNone(E.shift_table_batch(val, [(3, 5, 2)]))
             try:
                 slow = E._shift_table_slow(val, 3, 5, 2)
             except Exception as exc:       # the general path may reject junk; so must we

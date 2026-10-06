@@ -95,6 +95,35 @@ class CollapsedRunsLeaveOneEntryPerIndex(Case):
         self.assertEqual(tables_of(doc)[F_CHAR_TBL], before)
 
 
+class SeveralEditsInOneCall(CollapsedRunsLeaveOneEntryPerIndex):
+    """`apply` with more than one edit takes the one-pass path (CLAUDE.md rule 3)."""
+    TEXT = "aa Bold word and Bold again here\n"     # "Bold" at 3..7 and 17..21
+
+    def well_formed(self, doc, field):
+        idx = self.indexes(doc, field)
+        self.assertEqual(idx, sorted(set(idx)))
+        self.assertEqual(E.table_problems(doc), [])
+
+    def test_two_bold_words_deleted(self):
+        doc = self.with_table(F_CHAR_TBL, [(0, None), (3, BOLD), (7, None), (17, BOLD), (21, None)])
+        doc.apply([(3, 7, ""), (17, 21, "")])
+        self.well_formed(doc, F_CHAR_TBL)
+        self.assertEqual(rows(doc, F_CHAR_TBL), [(0, None), (3, None), (13, None)])   # no bold left
+
+    def test_shrunk_grown_and_inserted(self):
+        doc = self.with_table(F_CHAR_TBL, [(0, None), (3, BOLD), (7, None), (17, BOLD), (21, None)])
+        doc.apply([(3, 7, "B"), (12, 12, "inserted "), (17, 21, "Bolder")])
+        self.well_formed(doc, F_CHAR_TBL)
+        self.assertEqual(rows(doc, F_CHAR_TBL),
+                         [(0, None), (3, BOLD), (4, None), (23, BOLD), (29, None)])
+
+    def test_paragraph_styles_and_tracked_changes_together(self):
+        doc = self.with_table(F_DELETIONS, [(0, None), (3, CHANGE), (7, None)])
+        doc.apply([(3, 7, ""), (8, 12, "WORD"), (30, 30, "x")])
+        self.well_formed(doc, F_DELETIONS)
+        self.assertEqual(E.spans_of(tables_of(doc)[F_DELETIONS]), [])
+
+
 class TheReaderToleratesWhatItIsGiven(Case):
     def test_duplicate_entries_do_not_crash_the_reader(self):
         path = write_pages(os.path.join(self.tmp.name, "d.pages"), "aa Bold word\n",

@@ -213,31 +213,8 @@ def _reindexed(val, j, after_idx, stop):
     return b"\x0a" + write_varint(len(body)) + body
 
 
-def _shift_index_fast(val, start, end, delta):
-    """`shift_table` for a plain index-keyed table, or None for the general path.
-
-    Untouched entries are copied as slices; only the ones that move are re-encoded.
-    """
-    entries = scan_index_entries(val)
-    if entries is None:
-        return None
-    parts, run, moved, prev, ordered = [], 0, 0, -1, True
-    for idx, pos, after_idx, stop in entries:
-        j = shift_point(idx, start, end, delta)
-        if j <= prev:
-            ordered = False                  # a duplicate, or not ascending
-        prev = j
-        if j != idx:
-            moved += 1
-            parts += (val[run:pos], _reindexed(val, j, after_idx, stop))
-            run = stop
-    parts.append(val[run:])
-    out = b"".join(parts)
-    return (out if ordered else last_per_index(out)), moved
-
-
 def shift_table_batch(val, edits):
-    """Apply non-overlapping `edits` [(start, end, new_text)], ascending, to a plain index
+    """Apply non-overlapping `edits` [(start, end, delta)], ascending, to a plain index
     table in one pass: -> (bytes, entries moved per edit, ascending), or None.
 
     Same result as shifting after each edit right to left: an entry moves by the delta of
@@ -248,9 +225,7 @@ def shift_table_batch(val, edits):
     entries = scan_index_entries(val)
     if entries is None:
         return None
-    starts = [e[0] for e in edits]
-    ends = [e[1] for e in edits]
-    deltas = [len(e[2]) - (e[1] - e[0]) for e in edits]
+    starts, ends, deltas = zip(*edits)
     prefix = [0]
     for d in deltas:
         prefix.append(prefix[-1] + d)
@@ -284,8 +259,19 @@ def shift_table_batch(val, edits):
 
 def shift_table(val, start, end, delta):
     """Rewrite the character index of every entry in one attribute table."""
-    return (_shift_index_fast(val, start, end, delta)
-            or _shift_table_slow(val, start, end, delta))
+    fast = shift_table_batch(val, [(start, end, delta)])
+    if fast is None:
+        return _shift_table_slow(val, start, end, delta)
+    return fast[0], fast[1][0]
+
+
+def shift_step(num, val, start, end, delta, length):
+    """One edit's effect on one table: shift it, and keep text typed at the edge of a
+    tracked change out of that change. `length` is the text length after the edit."""
+    val, moved = shift_table(val, start, end, delta)
+    if start == end and num in CHANGE_TABLES and table_kind(val) == "index":
+        val = isolate_insertion(val, start, delta, length)
+    return val, moved
 
 
 def _shift_table_slow(val, start, end, delta):
@@ -1335,18 +1321,15 @@ class Document:
             if num == F_TEXT or wire != 2:
                 rebuilt.append((num, wire, val))
                 continue
-            batch = None if num in CHANGE_TABLES else shift_table_batch(val, ascending)
+            batch = None if num in CHANGE_TABLES else shift_table_batch(
+                val, [(s, e, d) for (s, e, _n), d in zip(ascending, deltas[::-1])])
             if batch is not None:
                 val, per_edit = batch
                 for k, n in enumerate(per_edit[::-1]):      # per_edit is ascending
                     moved[k] += n
             else:
                 for k, (start, end, _new) in enumerate(descending):
-                    val, n = shift_table(val, start, end, deltas[k])
-                    if (start == end and num in CHANGE_TABLES
-                            and table_kind(val) == "index"):
-                        # untracked text typed at a change's edge is not part of it
-                        val = isolate_insertion(val, start, deltas[k], lengths[k])
+                    val, n = shift_step(num, val, start, end, deltas[k], lengths[k])
                     moved[k] += n
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
@@ -1371,11 +1354,7 @@ class Document:
                 if num in (F_TEXT,) or wire != 2:
                     rebuilt.append((num, wire, val))
                     continue
-                val, n = shift_table(val, start, end, delta)
-                if (start == end and num in CHANGE_TABLES
-                        and table_kind(val) == "index"):
-                    # untracked text typed at a change's edge is not part of it
-                    val = isolate_insertion(val, start, delta, len(raw))
+                val, n = shift_step(num, val, start, end, delta, len(raw))
                 moved += n
                 rebuilt.append((num, wire, val))
             self._msg = emit(rebuilt)

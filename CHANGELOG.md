@@ -67,6 +67,9 @@ Add each change here in the same commit that makes it.
   anchor ends X: the new paragraphs go between X and the break, on X's page, and the break
   ends the last of them. They used to go after the break, onto the next page or after the
   anchored object.
+- One table shifter: a single edit is the one-pass shift with one edit, and the per-edit
+  step for the tracked-change tables is one helper shared by both `apply` paths. No change
+  in output.
 - A write reads the saved file back once, not three times: `save` hands the checked
   document to `verify` and `commit`. The well-formedness check finds duplicate entries in
   linear time (a 30,000-entry table took 13 s, now well under one), and footnote marks
