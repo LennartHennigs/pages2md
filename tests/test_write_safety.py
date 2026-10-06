@@ -142,5 +142,52 @@ class TrackedEditInsideAPendingChange(unittest.TestCase):
                 self.doc(F_INSERTIONS).apply_tracked([(at[0], at[1], "XY")])
 
 
+class WritesParseOnce(Case):
+    """A write read the package back in save, then again in verify or commit."""
+
+    def count_loads(self, *args):
+        real = E.Document.__init__
+        calls = []
+
+        def counting(doc, path):
+            calls.append(path)
+            real(doc, path)
+
+        with mock.patch.object(E.Document, "__init__", counting):
+            msg, out = cli(*args)
+        self.assertIsNone(msg, out)
+        return len(calls)
+
+    def test_replace(self):
+        self.assertEqual(self.count_loads("replace", "-f", "Titel", "-r", "Title", "--write",
+                                          "--no-backup", self.path), 2)   # load + read-back
+
+    def test_a_structural_command(self):
+        self.assertEqual(self.count_loads("retag", "--on", "Titel", "--style", "Heading 1",
+                                          "--write", "--no-backup", self.path), 2)
+
+    def test_the_document_save_returns_points_at_the_saved_file(self):
+        doc = E.Document(self.path)
+        out = os.path.join(self.tmp.name, "out.pages")
+        check = doc.save(out)
+        self.assertEqual((check.path, check.reader.path), (out, out))
+        self.assertFalse(os.path.exists(out + ".tmp"))
+
+
+class TableCheckIsLinear(unittest.TestCase):
+    def test_a_large_table_with_duplicates(self):
+        import time
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        n = 30000
+        entries = [(i, None) for i in range(n)] + [(n - 1, None)]
+        doc = E.Document(write_pages(os.path.join(tmp, "big.pages"), "x" * n,
+                                     {F_PARA_TBL: table([(0, 1)]), E.F_CHAR_TBL: table(entries)}))
+        t = time.perf_counter()
+        problems = E.table_problems(doc)
+        self.assertLess(time.perf_counter() - t, 2.0)          # quadratic took minutes
+        self.assertTrue(any("duplicate index [29999]" in p for p in problems), problems)
+
+
 if __name__ == "__main__":
     unittest.main()

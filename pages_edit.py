@@ -19,6 +19,7 @@ snapshot of every version so any edit can be undone:
     pages_edit.py revert HEAD~1 book.pages
 """
 import argparse, bisect, difflib, json, os, random, re, shutil, struct, subprocess, sys, time, uuid, zipfile
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from iwa_codec import (archives, pack_archives, iwa_decode, iwa_encode,
@@ -744,7 +745,7 @@ class Document:
         # body's maximum, and reusing one produces a duplicate-id document.
         # `reader.arcs` already spans every .iwa file's archives, keyed by id.
         self.next_id = 1 + max(reader.arcs, default=0)
-        self._flow_cache = None             # (message bytes, flow view)
+        self._flow_cache = None             # (message bytes, flow view, footnote marks)
 
     def select(self, handle):
         """Point the text and edit methods at one storage."""
@@ -1085,21 +1086,24 @@ class Document:
         message changes, which every edit does (callers that already hold the
         text can pass it as `raw` and skip decoding it again).
         """
-        msg = self._msg
-        if self._flow_cache and self._flow_cache[0] is msg:
-            return self._flow_cache[1]
-        raw = self.text()[0] if raw is None else raw
-        flow = flow_view(raw, self._footnote_marks(raw))
-        self._flow_cache = (msg, flow)
-        return flow
+        return self._flow_and_marks(raw)[0]
 
-    def _footnote_marks(self, raw):
-        val = parse_fields_of(self._msg).get(F_ATTACHMENTS, [None])[0]
-        return footnote_marks([(i, ref) for i, ref, _s in entry_rows(val)], raw)
+    def footnote_marks(self, raw=None):
+        """Offsets of the footnote references in the selected storage (cached with `flow`)."""
+        return self._flow_and_marks(raw)[1]
+
+    def _flow_and_marks(self, raw=None):
+        msg = self._msg
+        if not (self._flow_cache and self._flow_cache[0] is msg):
+            raw = self.text()[0] if raw is None else raw
+            val = parse_fields_of(msg).get(F_ATTACHMENTS, [None])[0]
+            marks = footnote_marks([(i, ref) for i, ref, _s in entry_rows(val)], raw)
+            self._flow_cache = (msg, flow_view(raw, marks), marks)
+        return self._flow_cache[1:]
 
     def footnote_refs(self, lo, hi):
         """Offsets of footnote references inside [lo, hi) of the selected storage."""
-        return sorted(i for i in self._footnote_marks(self.text()[0]) if lo <= i < hi)
+        return sorted(i for i in self.footnote_marks() if lo <= i < hi)
 
     def require_no_footnotes(self, lo, hi, what):
         """Refuse to remove text that holds a footnote reference.
@@ -1480,7 +1484,7 @@ class Document:
             if os.path.exists(tmp):
                 os.remove(tmp)            # never leave a half-written package behind
             raise
-        problems = written_problems(tmp)
+        problems, check = written_problems(tmp)
         if problems:
             os.remove(tmp)
             sys.exit(f"refusing to write {out_path}: the result would be an ill-formed "
@@ -1490,6 +1494,9 @@ class Document:
         os.replace(tmp, out_path)
         if os.path.abspath(out_path) == os.path.abspath(self.path):
             self.entries.restamp()        # what is on disk is what this object holds
+        check.path = check.reader.path = check.entries._path = out_path
+        check.entries.restamp()
+        return check                      # the written file, already read back and checked
 
 
 # Structure and pagination are reading concerns, so they live in pages2md.
@@ -1540,15 +1547,19 @@ def table_problems(doc):
                 continue
             kind = table_kind(val)
             if kind == "index":
-                idx = []
-                for n, w, sub in tokenize(val):          # file order, not sorted order
-                    fields = parse_fields_of(sub) if (n, w) == (1, 2) else {}
-                    if 1 in fields:
-                        idx.append(read_varint(fields[1][0], 0)[0])
+                scanned = scan_index_entries(val)
+                if scanned is not None:
+                    idx = [e[0] for e in scanned]
+                else:
+                    idx = []
+                    for n, w, sub in tokenize(val):      # file order, not sorted order
+                        fields = parse_fields_of(sub) if (n, w) == (1, 2) else {}
+                        if 1 in fields:
+                            idx.append(read_varint(fields[1][0], 0)[0])
                 where = f"{handle} field {num}"
                 if idx != sorted(idx):
                     out.append(f"{where}: unsorted entries {idx[:6]}")
-                dup = sorted({i for i in idx if idx.count(i) > 1})
+                dup = sorted(i for i, c in Counter(idx).items() if c > 1)
                 if dup:
                     out.append(f"{where}: duplicate index {dup[:4]}")
                 if idx and max(idx) > length:
@@ -1566,14 +1577,18 @@ def table_problems(doc):
 
 
 def written_problems(path):
-    """Everything wrong with a document we just wrote, read back with both tools."""
+    """(everything wrong with a document we just wrote, the Document read back or None).
+
+    Read back with both tools; the caller reuses the Document rather than parsing the
+    same file again.
+    """
     try:
         check = Document(path)
         problems = table_problems(check)
         check.reader.all_paragraphs()           # the reader must manage it too
     except (Exception, SystemExit) as exc:      # package_errors reports through sys.exit
-        return [f"cannot read it back: {exc}"]
-    return problems
+        return [f"cannot read it back: {exc}"], None
+    return problems, check
 
 
 # ------------------------------------------------------ fingerprint and plans
@@ -1790,7 +1805,7 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
     raw = doc.text()[0]
     out, raw_len = [], len(raw)
     view = hay.translate(SEARCH_VIEW)
-    marks = doc._footnote_marks(raw)
+    marks = doc.footnote_marks(raw)
     if marks:
         # a footnote reference sits inside a sentence: it is not a line break to ^ and $
         at = marks if keep is None else [k for k, r in enumerate(keep) if r in marks]
@@ -2067,7 +2082,7 @@ def cmd_replace(args):
 
     track = cfg.get("track", False) if args.track is None else args.track
     report = apply_groups(doc, groups, track)
-    doc.save(args.file)
+    written = doc.save(args.file)
     total = sum(r[4] for r in report)
     print(f"wrote {args.file}: {len(report)} edit(s)"
           f"{' as tracked changes' if track else ''}, "
@@ -2076,7 +2091,7 @@ def cmd_replace(args):
     if cfg.get("vcs"):
         after = vcs_snapshot(args.file, _summary(edits))
         print(f"committed: {after}")
-    print(f"new fingerprint: {verify(args.file, edits, track)}")
+    print(f"new fingerprint: {verify(args.file, edits, track, written)}")
 
 
 def _summary(edits):
@@ -2085,18 +2100,24 @@ def _summary(edits):
     return f"Replace {show(first[3])!r} -> {show(first[2])!r}{more}"
 
 
-def verify(path, edits, tracked=False):
-    """Re-open the written file and confirm the new text is readable."""
+def verify(path, edits, tracked=False, doc=None):
+    """Confirm the written file reads back and shows the edits.
+
+    `doc` is what `Document.save` returns: the file already re-read and checked by both
+    tools, so only the text needs looking at. Without it the file is opened here.
+    """
     try:
-        doc = Document(path)
+        problems = []
+        if doc is None:
+            doc = Document(path)
+            doc.reader.all_paragraphs()         # and pages2md must be able to read it
+            problems = table_problems(doc)
         # every storage, not just the body: an edit may live in a note
         parts = []
         for handle in doc.slots:
             doc.select(handle)
             parts.append(doc.accepted_map()[0])
         text = "\x00".join(parts)
-        doc.reader.all_paragraphs()             # and pages2md must be able to read it
-        problems = table_problems(doc)
     except (Exception, SystemExit) as exc:      # package_errors reports through sys.exit
         print(f"VERIFY FAILED: cannot re-read {path}: {exc}")
         return "?"
@@ -2171,14 +2192,14 @@ def cmd_plan(args):
     # One pass for the whole plan: the edits were resolved against a single
     # snapshot, and applying them right-to-left keeps every offset valid.
     report = apply_groups(doc, groups, track)
-    doc.save(args.file)
+    written = doc.save(args.file)
     shifted = sum(r[4] for r in report)
     print(f"\nwrote {args.file}: {len(report)} replacement(s)"
           f"{' as tracked changes' if track else ''}, "
           f"{shifted} character indices shifted")
     if cfg.get("vcs"):
         print(f"committed: {vcs_snapshot(args.file, summary)}")
-    print(f"new fingerprint: {verify(args.file, flat, track)}")
+    print(f"new fingerprint: {verify(args.file, flat, track, written)}")
 
 
 def locate_comment(doc, args):
@@ -2242,11 +2263,10 @@ def commit(doc, args, summary, describe=None):
     elif not args.no_backup:
         shutil.copy2(args.file, args.file + ".bak")
         print(f"backup: {args.file}.bak")
-    doc.save(args.file)
+    check = doc.save(args.file)
     print(f"wrote {args.file}: {summary}")
     if cfg.get("vcs"):
         print(f"committed: {vcs_snapshot(args.file, summary)}")
-    check = Document(args.file)
     if describe:
         print(describe(check))
     print(f"new fingerprint: {fingerprint(check)}")

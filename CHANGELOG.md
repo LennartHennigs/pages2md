@@ -67,6 +67,10 @@ Add each change here in the same commit that makes it.
   anchor ends X: the new paragraphs go between X and the break, on X's page, and the break
   ends the last of them. They used to go after the break, onto the next page or after the
   anchored object.
+- A write reads the saved file back once, not three times: `save` hands the checked
+  document to `verify` and `commit`. The well-formedness check finds duplicate entries in
+  linear time (a 30,000-entry table took 13 s, now well under one), and footnote marks
+  are cached with the paragraph view.
 - Faster edits on large documents. `Document.apply` moves each attribute-table entry once
   for all the edits of a call instead of rewriting every table after every edit: 3,000
   replacements in a 109,000-character, 800-entry-per-table document take 50 ms (about 38 ms
