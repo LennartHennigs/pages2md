@@ -85,9 +85,10 @@ class Harness(unittest.TestCase):
             doc._put_field(E.F_CHAR_TBL, E.emit([(1, 2, E.entry_bytes(3, None)),
                                                  (1, 2, E.entry_bytes(3, None))]))
             payload = E.pack_archives(doc.arcs)     # write the bad bytes the way a bug would,
+            files = {n: doc.entries[n] for n in doc.names}     # (read before the file is rewritten)
             with zipfile.ZipFile(edited, "w") as z:  # past save()'s own refusal
                 for n in doc.names:
-                    z.writestr(n, E.iwa_encode(payload) if n == E.BODY_ENTRY else doc.entries[n])
+                    z.writestr(n, E.iwa_encode(payload) if n == E.BODY_ENTRY else files[n])
             results = {r.name: r for r in R.check(pack)}
         self.assertFalse(results["replace-plain"].ok)
         self.assertIn("ill-formed tables", " ".join(results["replace-plain"].problems))

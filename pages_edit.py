@@ -18,7 +18,7 @@ snapshot of every version so any edit can be undone:
     pages_edit.py history book.pages
     pages_edit.py revert HEAD~1 book.pages
 """
-import argparse, difflib, json, os, random, re, shutil, struct, subprocess, sys, time, uuid, zipfile
+import argparse, bisect, difflib, json, os, random, re, shutil, struct, subprocess, sys, time, uuid, zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from iwa_codec import (archives, pack_archives, iwa_decode, iwa_encode,
@@ -182,8 +182,145 @@ def last_per_index(val):
     return emit([(1, 2, kept[i]) for i in sorted(kept)])
 
 
+def scan_index_entries(val):
+    """[(index, entry start, payload start, end of the index varint, entry end)] or None.
+
+    A byte-level walk of an index-keyed table (entries `0a len 08 <index> ...`). None when
+    the bytes are anything else -- empty, range-keyed, malformed -- so callers fall back to
+    the general tokenizer. It exists because shifting a table per edit was the cost of
+    `apply`: this reads each entry once, without building tokens.
+    """
+    out, pos, n = [], 0, len(val)
+    try:
+        while pos < n:
+            if val[pos] != 0x0A:
+                return None
+            p = pos + 1
+            b = val[p]
+            ln, sh = b & 0x7F, 7
+            while b & 0x80:
+                p += 1
+                b = val[p]
+                ln |= (b & 0x7F) << sh
+                sh += 7
+            p += 1
+            end = p + ln
+            if ln == 0 or end > n or val[p] != 0x08:
+                return None
+            q = p + 1
+            b = val[q]
+            idx, sh = b & 0x7F, 7
+            while b & 0x80:
+                q += 1
+                b = val[q]
+                idx |= (b & 0x7F) << sh
+                sh += 7
+            out.append((idx, pos, p, q + 1, end))
+            pos = end
+    except IndexError:
+        return None
+    return out or None
+
+
+def _shift_index_fast(val, start, end, delta):
+    """`shift_table` for a plain index-keyed table, or None to use the general path.
+
+    Same bytes as the general path (see `_shift_table_slow`): untouched entries are copied
+    as slices, only the ones that move are re-encoded.
+    """
+    entries = scan_index_entries(val)
+    if entries is None:
+        return None
+    parts, run, moved, prev, ordered = [], 0, 0, -1, True
+    for idx, pos, pay, after_idx, stop in entries:
+        # shift_point, inlined: this loop runs once per entry per edit
+        if idx >= end:
+            j = idx + delta
+        elif idx > start:
+            j = start + min(idx - start, end - start + delta)
+        else:
+            j = idx
+        if j <= prev:
+            ordered = False                  # a duplicate, or not ascending: check below
+        prev = j
+        if j == idx:
+            continue
+        moved += 1
+        parts.append(val[run:pos])
+        vb = (bytes((j,)) if j < 0x80 else
+              bytes((j & 0x7F | 0x80, j >> 7)) if j < 0x4000 else write_varint(j))
+        body = b"\x08" + vb + val[after_idx:stop]
+        n = len(body)
+        parts.append((b"\x0a" + bytes((n,)) if n < 0x80 else b"\x0a" + write_varint(n)) + body)
+        run = stop
+    parts.append(val[run:])
+    out = b"".join(parts)
+    return (out if ordered else last_per_index(out)), moved
+
+
+def shift_table_batch(val, edits):
+    """Apply several non-overlapping edits `[(start, end, new_text)]` (ascending) to a plain
+    index table in one pass; -> (bytes, entries moved per edit, ascending) or None.
+
+    The result is what shifting after each edit, right to left, gives. An entry at `i` moves
+    by the delta of every edit whose end is at or before `i`; one strictly inside an edit is
+    first clamped to it (`shift_point`). None for anything but a plain index table, or one
+    that is not in ascending order (the general path handles duplicates and order).
+    """
+    entries = scan_index_entries(val)
+    if entries is None:
+        return None
+    starts = [e[0] for e in edits]
+    ends = [e[1] for e in edits]
+    deltas = [len(e[2]) - (e[1] - e[0]) for e in edits]
+    prefix, changed = [0], [0]
+    for d in deltas:
+        prefix.append(prefix[-1] + d)
+        changed.append(changed[-1] + (1 if d else 0))
+    # entries strictly inside an edit are clamped, and an entry at or after an edit's end
+    # moves at that step whenever its delta is not zero
+    per_edit = [0] * len(edits)
+    sorted_idx = [e[0] for e in entries]
+    if any(b < a for a, b in zip(sorted_idx, sorted_idx[1:])):
+        return None
+    parts, run, prev, ordered = [], 0, -1, True
+    for idx, pos, pay, after_idx, stop in entries:
+        cnt = bisect.bisect_right(ends, idx)         # edits that end at or before idx
+        j = idx + prefix[cnt]
+        if cnt < len(edits) and starts[cnt] < idx:   # idx lies strictly inside edit `cnt`
+            j = starts[cnt] + min(idx - starts[cnt], ends[cnt] - starts[cnt] + deltas[cnt]) + prefix[cnt]
+            if j - prefix[cnt] != idx:
+                per_edit[cnt] += 1
+        if j <= prev:
+            return None                              # collapsed or duplicate: general path
+        prev = j
+        if j == idx:
+            continue
+        parts.append(val[run:pos])
+        vb = (bytes((j,)) if j < 0x80 else
+              bytes((j & 0x7F | 0x80, j >> 7)) if j < 0x4000 else write_varint(j))
+        body = b"\x08" + vb + val[after_idx:stop]
+        n = len(body)
+        parts.append((b"\x0a" + bytes((n,)) if n < 0x80 else b"\x0a" + write_varint(n)) + body)
+        run = stop
+    parts.append(val[run:])
+    # entries moved at each edit's step: those at or after its end, if it changes the length
+    for k in range(len(edits)):
+        if deltas[k]:
+            per_edit[k] += len(entries) - bisect.bisect_left(sorted_idx, ends[k])
+    return b"".join(parts), per_edit
+
+
 def shift_table(val, start, end, delta):
     """Rewrite the character index of every entry in one attribute table."""
+    fast = _shift_index_fast(val, start, end, delta)
+    if fast is not None:
+        return fast
+    return _shift_table_slow(val, start, end, delta)
+
+
+def _shift_table_slow(val, start, end, delta):
+    """The general version: any table shape, with the warning for unknown ones."""
     kind = table_kind(val)
     if kind == "range":
         return shift_ranges(val, start, end, delta)
@@ -535,15 +672,44 @@ def put_span(val, start, end, archive_id):
 
 
 # ------------------------------------------------------------------- document
+class PackageEntries(dict):
+    """The package's files by name. The IWA files are read up front; the rest (images,
+    previews, the plists) only when something asks for them, which is `save` copying them.
+
+    A file that changed on disk between loading and that read would give a mixed
+    package, so it is checked and refused.
+    """
+
+    def __init__(self, path, names):
+        super().__init__()
+        self._path, self._names = path, set(names)
+        st = os.stat(path)
+        self._stamp = (st.st_size, st.st_mtime_ns)
+
+    def __missing__(self, name):
+        if name not in self._names:
+            raise KeyError(name)
+        st = os.stat(self._path)
+        if (st.st_size, st.st_mtime_ns) != self._stamp:
+            sys.exit(f"{self._path} changed on disk after it was loaded; nothing was written. "
+                     "Run the command again.")
+        with zipfile.ZipFile(self._path) as z:
+            data = self[name] = z.read(name)
+        return data
+
+
 class Document:
     def __init__(self, path):
         self.path = path
         with package_errors(path):
             with zipfile.ZipFile(path) as z:
                 self.names = z.namelist()
-                self.entries = {n: z.read(n) for n in self.names}
+                self.entries = PackageEntries(path, self.names)
+                for n in self.names:
+                    if n.endswith(".iwa"):
+                        self.entries[n] = z.read(n)
                 self.compress = {i.filename: i.compress_type for i in z.infolist()}
-            if BODY_ENTRY not in self.entries:
+            if BODY_ENTRY not in self.names:
                 sys.exit(f"{os.path.basename(path)}: no {BODY_ENTRY}; not a Pages document")
             body_payload = iwa_decode(self.entries[BODY_ENTRY])
             self.arcs = archives(body_payload)
@@ -1145,11 +1311,58 @@ class Document:
 
     # -- editing ---------------------------------------------------------
     def apply(self, edits):
-        """Apply [(raw_start, raw_end, new_text)]; returns a report."""
+        """Apply [(raw_start, raw_end, new_text)]; returns a report.
+
+        Edits that do not overlap are applied in one pass per table: each entry moves by
+        the sum of the deltas of the edits before it (found with a bisect), instead of
+        every table being rewritten after every edit. Anything else -- overlapping edits,
+        a table that is not a plain index table, the change tables whose entries need
+        `isolate_insertion` after each edit -- takes the one-at-a-time path, which gives
+        the same bytes (tests/test_shift_fast.py).
+        """
         raw, chunks = self.text()
         if chunks != 1:
             sys.exit(f"{self.path}: body text is split across {chunks} chunks; "
                      "not supported")
+        descending = [minimal_edit(raw, s, e, n) for s, e, n in sorted(edits, reverse=True)]
+        ascending = descending[::-1]
+        if len(ascending) < 2 or any(a[1] > b[0] for a, b in zip(ascending, ascending[1:])):
+            return self._apply_sequential(edits)
+        deltas = [len(n) - (e - s) for s, e, n in descending]
+        lengths, size = [], len(raw)          # text length after each step, right to left
+        for d in deltas:
+            size += d
+            lengths.append(size)
+        moved = [0] * len(descending)
+        rebuilt = []
+        for num, wire, val in tokenize(self._msg):
+            if num == F_TEXT or wire != 2:
+                rebuilt.append((num, wire, val))
+                continue
+            batch = None if num in CHANGE_TABLES else shift_table_batch(val, ascending)
+            if batch is not None:
+                val, per_edit = batch
+                for k, n in enumerate(per_edit[::-1]):      # per_edit is ascending
+                    moved[k] += n
+            else:
+                for k, (start, end, _new) in enumerate(descending):
+                    val, n = shift_table(val, start, end, deltas[k])
+                    if (start == end and num in CHANGE_TABLES
+                            and table_kind(val) == "index"):
+                        # untracked text typed at a change's edge is not part of it
+                        val = isolate_insertion(val, start, deltas[k], lengths[k])
+                    moved[k] += n
+            rebuilt.append((num, wire, val))
+        self._msg = emit(rebuilt)
+        for start, end, new in descending:
+            raw = raw[:start] + new + raw[end:]
+        self._write_text(raw)
+        return [(s, e, n, deltas[k], moved[k]) for k, (s, e, n) in enumerate(descending)]
+
+    def _apply_sequential(self, edits):
+        """One edit at a time, every table rewritten after each: simple, and the reference
+        `apply` is tested against."""
+        raw = self.text()[0]
         report = []
         # right-to-left so earlier offsets stay valid
         for start, end, new in sorted(edits, reverse=True):
@@ -1257,10 +1470,15 @@ class Document:
         payload = pack_archives(self.arcs)
         self.entries[BODY_ENTRY] = iwa_encode(payload)
         tmp = out_path + ".tmp"
-        with zipfile.ZipFile(tmp, "w") as z:
-            for n in self.names:          # preserve order and storage method
-                z.writestr(n, self.entries[n],
-                           compress_type=self.compress.get(n, zipfile.ZIP_STORED))
+        try:
+            with zipfile.ZipFile(tmp, "w") as z:
+                for n in self.names:      # preserve order and storage method
+                    z.writestr(n, self.entries[n],
+                               compress_type=self.compress.get(n, zipfile.ZIP_STORED))
+        except BaseException:
+            if os.path.exists(tmp):
+                os.remove(tmp)            # never leave a half-written package behind
+            raise
         problems = written_problems(tmp)
         if problems:
             os.remove(tmp)
