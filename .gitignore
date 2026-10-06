@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# runtime state these tools create next to a document being edited
+.pages-vcs/
+*.pages.bak
+.pages-index.json
+.pages-edit.json
