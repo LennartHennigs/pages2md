@@ -607,6 +607,10 @@ end tell'
 Always run these on a **copy**. Checks 1 and 2 are the tools agreeing with themselves;
 only check 3 proves Pages accepts the result.
 
+## Changes
+
+See [`CHANGELOG.md`](CHANGELOG.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
