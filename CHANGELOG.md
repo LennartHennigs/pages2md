@@ -133,6 +133,9 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- `replace --expect FINGERPRINT` only checked the fingerprint when writing, so a dry run
+  against a changed document looked fine; it is checked first.
+- A plan entry with `"page": 2` (a number) crashed; `page` takes a number or a string.
 - `comment add` works in a document that has no comment yet: the author is taken from the
   document's annotation author when there is no existing comment to copy it from. (Untested
   in Pages: no sample without any comment exists; see `insights.md`, "Still unproven".)

@@ -949,7 +949,7 @@ def page_range(doc, spec, text_len):
     if not bounds:
         sys.exit("no page index yet -- run `index` first (it needs Pages, "
                  "since pagination is not stored in the document)")
-    m = re.fullmatch(r"(\d+)(?:\s*-\s*(\d+))?", spec.strip())
+    m = re.fullmatch(r"(\d+)(?:\s*-\s*(\d+))?", str(spec).strip())
     if not m:
         sys.exit(f"--page expects N or N-M, not {spec!r}")
     lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))

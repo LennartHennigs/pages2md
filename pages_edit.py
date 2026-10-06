@@ -1772,6 +1772,8 @@ def read_text_file(path):
 
 def cmd_replace(args):
     doc = Document(args.file)
+    if args.expect:                     # a dry run should already say the text has moved
+        check_fingerprint(doc, args.expect, "you took that fingerprint")
     # a file almost always ends with a newline the author did not mean to match
     pattern = (args.find if args.find is not None
                else read_text_file(args.find_file).rstrip("\n"))

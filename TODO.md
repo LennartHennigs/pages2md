@@ -29,8 +29,6 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
 
 - [ ] `Document.apply()` is O(edits × tables), about 38 ms per edit; `Document` loads the
       whole package including media.
-- [ ] Coverage is 85%. Missing tests: `plan`, `section_range`, `--page`, the page index,
-      config, history.
 - [ ] `git` missing or `commit.gpgsign` set on the machine breaks the history commands.
 
 ## Samples wanted
