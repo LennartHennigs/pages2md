@@ -558,7 +558,6 @@ class Document:
                 if mtype in (T_STORAGE, T_ATTACHMENT, T_COMMENT,
                              T_COMMENT_REF, T_CHANGE):
                     self.by_id[ident] = (ai, mi, mtype)   # prefer what we use
-        self.slot = self._find_body()
         # "body" plus one handle per note (footnote or margin note), in reading order. Notes live
         # in their own storages with their own offset spaces, which is why a
         # body-only editor cannot reach them.
@@ -573,6 +572,11 @@ class Document:
         import pages2md
         reader = pages2md.PagesDoc(path)
         self.reader = reader              # reused by callers that need style/list lookups
+        # the reader decides which storage is the body; the editor only finds it again
+        if reader._body_id() not in self.by_id:
+            sys.exit(f"{path}: the body text is not in {BODY_ENTRY}; not supported")
+        ai, mi, _t = self.by_id[reader._body_id()]
+        self.slot = (ai, mi)
         self.slots, self.anchors = {}, {}
         for handle, sid, anchor, kind in reader.storages():
             if kind == "toc" or sid is None or sid not in self.by_id:
@@ -589,20 +593,6 @@ class Document:
         # `reader.arcs` already spans every .iwa file's archives, keyed by id.
         self.next_id = 1 + max(reader.arcs, default=0)
         self._flow_cache = None             # (message bytes, flow view)
-
-    def _find_body(self):
-        """(archive index, message index) of the largest text storage."""
-        best, size = None, -1
-        for ai, (_info, msgs) in enumerate(self.arcs):
-            for mi, (mtype, msg) in enumerate(msgs):
-                if mtype != T_STORAGE:
-                    continue
-                n = sum(len(v) for num, _w, v in tokenize(msg) if num == F_TEXT)
-                if n > size:
-                    best, size = (ai, mi), n
-        if best is None:
-            sys.exit(f"{self.path}: no text storage found")
-        return best
 
     def select(self, handle):
         """Point the text and edit methods at one storage."""

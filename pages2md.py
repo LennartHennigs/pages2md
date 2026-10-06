@@ -370,10 +370,9 @@ class PagesDoc:
         return found - {body_id}
 
     def _body_id(self):
-        text = self._raw_text()
-        return next((i for i, (t, msg, _s) in self.arcs.items()
-                     if t == T_STORAGE
-                     and storage_text(parse_fields(msg)) == text), None)
+        """Archive id of the body storage: the one holding the most text."""
+        self._body()
+        return self._body_ident
 
     def storages(self):
         """[(handle, storage id, anchor or None, kind)] -- every text storage.
@@ -405,16 +404,16 @@ class PagesDoc:
     def _body(self):
         if getattr(self, "_body_cache", None) is not None:
             return self._body_cache
-        best, size = None, -1
-        for t, m, _ in self.arcs.values():
+        best, size, ident = None, -1, None
+        for i, (t, m, _) in self.arcs.items():
             if t != T_STORAGE:
                 continue
             n = sum(len(b) for b in parse_fields(m).get(F_TEXT, []))
             if n > size:
-                best, size = m, n
+                best, size, ident = m, n, i
         if best is None:
             raise SystemExit(f"{self.path}: no text storage found")
-        self._body_cache = parse_fields(best)
+        self._body_cache, self._body_ident = parse_fields(best), ident
         return self._body_cache
 
     @staticmethod

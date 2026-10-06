@@ -63,6 +63,8 @@ Add each change here in the same commit that makes it.
 
 ### Changed
 
+- The editor takes the body storage from the reader (`PagesDoc._body_id`) instead of
+  finding "the largest text storage" a second way. No change on any sample.
 - One word for the text storages anchored in the body: **note** (a footnote, or a margin
   note, which is unnumbered and renders as a blockquote). `pages2md.py --notes` replaces
   `--sidenotes` (the old name still works), and the JSON key `sidenote` (a paragraph's
