@@ -29,7 +29,6 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
 
 - [ ] `Document.apply()` is O(edits × tables), about 38 ms per edit; `Document` loads the
       whole package including media.
-- [ ] `git` missing or `commit.gpgsign` set on the machine breaks the history commands.
 
 ## Samples wanted
 

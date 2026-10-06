@@ -133,6 +133,10 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- The document history works on a machine that signs commits (`commit.gpgsign=true` made
+  every write fail with `config --vcs on`); signing is off for the history repo only.
+- A missing `git`, or a git command that fails, ends in one message and changes nothing,
+  not a traceback (a write with history on is refused before the document is touched).
 - `replace --expect FINGERPRINT` only checked the fingerprint when writing, so a dry run
   against a changed document looked fine; it is checked first.
 - A plan entry with `"page": 2` (a number) crashed; `page` takes a number or a string.

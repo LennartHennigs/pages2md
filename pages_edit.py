@@ -1489,9 +1489,22 @@ def vcs_root(doc):
     return os.path.join(os.path.dirname(os.path.abspath(doc)) or ".", VCS_DIR)
 
 
-def git(root, *args, check=True):
-    return subprocess.run(["git", "-C", root, *args], check=check,
-                          capture_output=True, text=True)
+def git(root, *args, check=True, text=True):
+    """Run git in the history repo; exit with a message if it is missing or fails.
+
+    Signing is switched off for this repo's commits: the history is a safety net, and a
+    `commit.gpgsign=true` in the user's own config (with a key that is locked or absent)
+    would make every write fail.
+    """
+    cmd = ["git", "-C", root, "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args]
+    try:
+        return subprocess.run(cmd, check=check, capture_output=True, text=text)
+    except FileNotFoundError:
+        sys.exit("git is not installed (or not on PATH); the document history and "
+                 "`config --vcs on` need it. Nothing was changed.")
+    except subprocess.CalledProcessError as exc:
+        err = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
+        sys.exit(f"`git {' '.join(args)}` failed: {err.strip() or exc}. Nothing further was changed.")
 
 
 def vcs_init(doc):
@@ -2321,14 +2334,12 @@ def cmd_revert(args):
                  "first.")
     # Resolve the ref first: the safety snapshot below is a new commit and would
     # shift what `HEAD~1` means.
-    rev = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "--quiet",
-                          f"{args.ref}^{{commit}}"], capture_output=True, text=True)
+    rev = git(root, "rev-parse", "--verify", "--quiet", f"{args.ref}^{{commit}}", check=False)
     if rev.returncode:
         sys.exit(f"unknown version {args.ref!r}; see `history` for the commits")
     ref = rev.stdout.strip()
     vcs_snapshot(args.file, "Before revert to " + args.ref)
-    blob = subprocess.run(["git", "-C", root, "show", f"{ref}:{name}"],
-                          capture_output=True)
+    blob = git(root, "show", f"{ref}:{name}", check=False, text=False)
     if blob.returncode:
         sys.exit(f"cannot read {name} at {args.ref}: "
                  f"{blob.stderr.decode(errors='replace').strip()}")

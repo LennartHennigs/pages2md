@@ -23,6 +23,7 @@ same zip → IWA → archive → storage path as a real document.
 | `test_delete_boundaries.py` | deleting the last paragraph or one ended by a break character takes the previous newline; a paragraph with a footnote reference is refused (API, command, dry run) |
 | `test_robustness.py` | cyclic comment chains, zero-width match at the end with tracked deletions, comment over a line break, style names (`Body` → `Body 1`), `--where` rejected on structural commands, `--links`, messages instead of tracebacks (bad packages, regexes, input files) |
 | `test_commands.py` | `--in` sections (ranges, ambiguity, substring), the page index (built with a faked `osascript`, cached, stale, unreadable), `--page` for reading, edits and plans, plans (dry run, write, scope, fingerprint, overlap, bad input), config, history, revert, `fingerprint`/`--expect` |
+| `test_git.py` | history with `commit.gpgsign=true` and a failing signer, with git missing, and with a failing git command |
 | `test_guard.py` | the Pages-open guard does not crash without `osascript` |
 | `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 
