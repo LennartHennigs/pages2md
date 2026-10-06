@@ -8,8 +8,8 @@ the second half lost its paragraph style. Found in a real document (Pages
 import os, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fixture import (write_pages, table, rows, char_style, T_CHAR_STYLE,
-                     F_PARA_TBL, F_CHAR_TBL, F_ATTACHMENTS)
+from fixture import (write_pages, table, rows, char_style, footnote, T_CHAR_STYLE,
+                     F_PARA_TBL, F_CHAR_TBL, F_ATTACHMENTS, F_DELETIONS)
 import pages_edit as E
 import pages2md as P
 
@@ -101,6 +101,91 @@ class FootnoteIsInline(unittest.TestCase):
                          ["Before", "After", ""])
 
 
+class FootnotesAsMarkdown(unittest.TestCase):
+    """Footnote references render as [^n] with the definitions at the end."""
+
+    NOTE1, NOTE2 = 1000, 1001
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def doc(self, text, anchors, notes, extra_tables=None, name="n.pages"):
+        """anchors: [(offset, attachment id)]; notes: archives from footnote()."""
+        tables = {F_PARA_TBL: table([(0, 1)]), F_ATTACHMENTS: table(anchors)}
+        tables.update(extra_tables or {})
+        path = write_pages(os.path.join(self.tmp.name, name), text, tables,
+                           extra=[a for n in notes for a in n])
+        return P.PagesDoc(path)
+
+    def md(self, doc, **kw):
+        return P.render_markdown(doc, doc.all_paragraphs(**kw))
+
+    def test_reference_and_definition(self):
+        doc = self.doc(TEXT, [(MARK, 1100)],
+                       [footnote(1100, 1200, "\ufffc Note text.")])
+        self.assertEqual(self.md(doc), "A wicked problem[^1] is ill-defined.\n\n"
+                         "Second paragraph.\n\nThird.\n\n[^1]: Note text.\n")
+
+    def test_numbered_in_reading_order(self):
+        text = "One\x0e and two\x0e.\nThree\x0e.\n"
+        anchors = [(text.index("\x0e"), 1100), (text.index("\x0e", 5), 1101),
+                   (text.rindex("\x0e"), 1102)]
+        doc = self.doc(text, anchors, [footnote(1100, 1200, "\ufffc First."),
+                                       footnote(1101, 1201, "\ufffc Second."),
+                                       footnote(1102, 1202, "\ufffc Third.")])
+        self.assertEqual(self.md(doc), "One[^1] and two[^2].\n\nThree[^3].\n\n"
+                         "[^1]: First.\n\n[^2]: Second.\n\n[^3]: Third.\n")
+
+    def test_multi_paragraph_note(self):
+        doc = self.doc(TEXT, [(MARK, 1100)],
+                       [footnote(1100, 1200, "\ufffc First part.\nSecond part.")])
+        self.assertTrue(self.md(doc).endswith(
+            "\n\n[^1]: First part.\n\n    Second part.\n"))
+
+    def test_reference_after_emphasis(self):
+        doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")],
+                       {F_CHAR_TBL: table([(2, 901), (MARK, None)])})
+        self.assertTrue(self.md(doc).startswith("A wicked problem[^1] is"))
+
+    def test_skip_drops_references_and_definitions(self):
+        doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")])
+        md = self.md(doc, sidenotes="skip")
+        self.assertNotIn("[^", md)
+        self.assertTrue(md.startswith("A wicked problem is ill-defined."))
+
+    def test_only_shows_just_the_definitions(self):
+        doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")])
+        self.assertEqual(self.md(doc, sidenotes="only"), "[^1]: N.\n")
+
+    def test_note_anchored_elsewhere_stays_a_blockquote(self):
+        # an attachment on an ordinary character is not a footnote reference
+        doc = self.doc(TEXT, [(2, 1100)], [footnote(1100, 1200, "\ufffc Aside.")])
+        md = self.md(doc)
+        self.assertIn("> Aside.", md)
+        self.assertNotIn("[^", md)
+
+    def test_deleted_reference_takes_its_note_with_it(self):
+        dels = table([(MARK, 700), (MARK + 1, None)])
+        doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")],
+                       {F_DELETIONS: dels})
+        accepted = self.md(doc)
+        self.assertNotIn("[^", accepted)
+        self.assertNotIn("N.", accepted)
+        self.assertIn("[^1]: N.", self.md(doc, changes="reject"))
+
+    def test_json_carries_the_numbers(self):
+        doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")])
+        paras = doc.all_paragraphs()
+        self.assertEqual(paras[0]["ref_nos"], [1])
+        shown = [p["footnote"] for p in paras if p["raw"].strip()]
+        self.assertEqual(shown, [None, 1, None, None])   # note follows its paragraph
+
+    def test_plain_text_is_unchanged(self):
+        doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")])
+        self.assertNotIn("[^", P.render_plain(doc, doc.all_paragraphs()))
+
+
 KITCHEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples",
                        "kitchen-sink.pages")
 
@@ -109,7 +194,8 @@ KITCHEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples",
 class KitchenSinkFootnote(unittest.TestCase):
     def test_sentence_is_not_split(self):
         md = P.render_markdown(None, P.PagesDoc(KITCHEN).all_paragraphs())
-        self.assertIn("What about a footnote?\n\n> What about it?", md)
+        self.assertIn("What about a footnote[^1]?\n", md)
+        self.assertTrue(md.endswith("\n\n[^1]: What about it?\n"), md[-80:])
         self.assertNotIn("\n\n?\n", md)
 
 

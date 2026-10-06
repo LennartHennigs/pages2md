@@ -196,11 +196,16 @@ class RealGuide(CopyCase):
 
     def test_footnoted_sentences_are_whole(self):
         md = markdown(GUIDE)
-        self.assertIn("works particularly well for *wicked problems* – ill-defined "
-                      "and ambiguous challenges that resist straightforward, "
-                      "clear-cut approaches.\n\n> For more details see:", md)
+        self.assertIn("works particularly well for *wicked problems*[^1] – "
+                      "ill-defined and ambiguous challenges that resist "
+                      "straightforward, clear-cut approaches.\n\n", md)
         self.assertNotIn("\n\n– ill-defined", md)      # the old split
-        self.assertIn("validated with users .\n\n> Because Design Thinking", md)
+        self.assertIn("validated with users[^2] .\n", md)
+        self.assertIn("\n\n[^1]: For more details see: Camillus:", md)
+        # footnote 2 has a manual line break inside it: a hard break, indented
+        self.assertIn("\n\n[^2]: Because Design Thinking", md)
+        self.assertIn("'humans'.", md)
+        self.assertIn("  \n    Also, users and customers", md)
 
     def test_styles_resolve_through_localised_names(self):
         # German style names ("Text", "Überschrift", "Fußnote") map to the

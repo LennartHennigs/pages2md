@@ -417,6 +417,22 @@ class PagesDoc:
     def _raw_text(self):
         return b"".join(self._body().get(F_TEXT, [])).decode("utf-8", "replace")
 
+    def _dropped(self, f, changes):
+        """Character indices a tracked-change mode leaves out of the text."""
+        ranges = (self._ranges(f, F_DELETIONS) if changes == "accept" else
+                  self._ranges(f, F_INSERTIONS) if changes == "reject" else [])
+        return {i for a, b in ranges for i in range(a, b)}
+
+    def footnotes(self):
+        """[(anchor, storage id)]: the notes whose reference is a footnote mark.
+
+        Numbered 1.. in this order. Other attachments to a text storage are
+        not footnotes and stay as they were (blockquotes).
+        """
+        raw = u16(self._raw_text())
+        return [(a, sid) for a, sid in self.sidenotes()
+                if raw[a:a + 1] == FOOTNOTE_MARK]
+
     def paragraphs(self, changes="accept", fields=None):
         f = fields if fields is not None else self._body()
         # the UTF-16 view, so positions line up with the tables; each
@@ -438,16 +454,11 @@ class PagesDoc:
         char_tbl = self._table(f, F_CHAR_TBL)
         l_idx = [i for i, _ in list_tbl]
         # Tracked changes: the storage holds original *and* revised text.
-        drop = set()
-        if changes == "accept":
-            for a, b in self._ranges(f, F_DELETIONS):
-                drop.update(range(a, b))
+        drop = self._dropped(f, changes)
         marks = self._ranges(f, F_DELETIONS) if changes == "mark" else []
         m_idx = [a for a, _ in marks]
         m_ends = sorted(b for _a, b in marks)
-        if changes == "reject":
-            for a, b in self._ranges(f, F_INSERTIONS):
-                drop.update(range(a, b))
+        refs_here = self.inline_marks(f, text)
         p_idx = [i for i, _ in para_tbl]
         c_idx = [i for i, _ in char_tbl]
 
@@ -502,7 +513,10 @@ class PagesDoc:
                 runs = [(m[a], m[b], *rest) for a, b, *rest in runs]
                 struck = [(m[a], m[b]) for a, b in struck]
                 raw = show(raw)
+            refs = [m for m in sorted(refs_here)
+                    if pos <= m < pos + width and m not in drop]
             out.append(dict(offset=pos, raw=raw, style=name, struck=struck,
+                            refs=refs,
                             list=(bullet or "").split("liststyle-")[-1] or None,
                             semantic=(semantic or "").split("paragraphstyle-")[-1],
                             runs=runs))
@@ -512,11 +526,17 @@ class PagesDoc:
 
     def all_paragraphs(self, changes="accept", sidenotes="inline"):
         """Body paragraphs with each margin note placed at its anchor."""
-        paras = [dict(q, sidenote=None) for q in self.paragraphs(changes)]
+        paras = [dict(q, sidenote=None, footnote=None, ref_nos=[])
+                 for q in self.paragraphs(changes)]
         if sidenotes == "skip":
             return paras
-        notes = [dict(para, offset=anchor, sidenote=sid)
-                 for anchor, sid in self.sidenotes()
+        numbers = {a: n for n, (a, _sid) in enumerate(self.footnotes(), 1)}
+        gone = self._dropped(self._body(), changes)
+        for q in paras:
+            q["ref_nos"] = [numbers.get(a) for a in q["refs"]]
+        notes = [dict(para, offset=anchor, sidenote=sid,
+                      footnote=numbers.get(anchor), ref_nos=[])
+                 for anchor, sid in self.sidenotes() if anchor not in gone
                  for para in self.paragraphs(changes, self.storage(sid))]
         if sidenotes == "only":
             return notes
@@ -867,8 +887,18 @@ def _emphasize(raw, runs):
     return raw
 
 
+def _place_refs(text, numbers):
+    """Turn each footnote mark in `text` into [^n], in order; drop unnumbered."""
+    parts = text.split(FOOTNOTE_MARK)
+    out = [parts[0]]
+    for k, part in enumerate(parts[1:]):
+        n = numbers[k] if k < len(numbers) else None
+        out.append((f"[^{n}]" if n else "") + part)
+    return "".join(out)
+
+
 def render_markdown(doc, paras):
-    lines = []
+    lines, notes = [], {}
     for p in paras:
         raw = p["raw"]
         if HEADING.get(p["semantic"]):
@@ -876,11 +906,18 @@ def render_markdown(doc, paras):
         for a, b in sorted(p.get("struck", []), reverse=True):
             if raw[a:b].strip():
                 raw = raw[:a] + "~~" + raw[a:b] + "~~" + raw[b:]
-        body = _clean(_emphasize(raw, p["runs"]) if not p.get("struck") else raw)
+        body = _clean(_place_refs(
+            _emphasize(raw, p["runs"]) if not p.get("struck") else raw,
+            p.get("ref_nos", [])))
         if not body:
             continue
         level = HEADING.get(p["semantic"])
-        if p.get("sidenote"):
+        if p.get("footnote"):
+            # definitions go at the end; a note's later paragraphs are indented
+            # (a manual line break inside a note becomes a hard break)
+            notes.setdefault(p["footnote"], []).append(
+                body.replace("\n", "  \n    "))
+        elif p.get("sidenote"):
             lines.append("> " + body.replace("\n", "\n> "))
         elif level:
             lines.append("#" * level + " " + body.replace("\n", " "))
@@ -888,6 +925,10 @@ def render_markdown(doc, paras):
             lines.append("- " + body.replace("\n", " "))
         else:
             lines.append(body.replace("\n", "  \n"))   # LS -> hard break
+    for n in sorted(notes):
+        first, *rest = notes[n]
+        lines.append(f"[^{n}]: {first}")
+        lines.extend("    " + more for more in rest)
     return "\n\n".join(lines) + "\n"
 
 
@@ -1001,8 +1042,9 @@ def main(argv=None):
                          "deletions with ~~strikethrough~~")
     ap.add_argument("--sidenotes", default="inline",
                     choices=["inline", "skip", "only"],
-                    help="margin notes: inline at their anchor (default), "
-                         "skip them, or output only them")
+                    help="footnotes and margin notes: Markdown [^n] references "
+                         "with definitions at the end (default), skip them, or "
+                         "output only the notes")
     ap.add_argument("--in", dest="in_section", metavar="HEADING",
                     help="only the section with this heading (see --outline)")
     ap.add_argument("--page", metavar="N[-M]",

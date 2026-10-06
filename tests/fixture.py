@@ -10,7 +10,7 @@ import os, struct, sys, zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from iwa_codec import emit, write_varint, pack_archives, iwa_encode, read_varint
 import pages_edit as E
-from pages2md import (T_STORAGE, T_CHAR_STYLE, P_BOLD, P_ITALIC, F_PROPS,
+from pages2md import (T_STORAGE, T_ATTACHMENT, T_CHAR_STYLE, P_BOLD, P_ITALIC, F_PROPS,
                       F_TEXT, F_PARA_TBL, F_LIST_TBL, F_CHAR_TBL,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS, F_ATTACHMENTS)
 
@@ -51,6 +51,20 @@ def char_style(bold=False, italic=False):
     if italic:
         props.append((P_ITALIC, 0, write_varint(1)))
     return emit([(F_PROPS, 2, emit(props))])
+
+
+def footnote(ref_id, storage_id, text, paragraphs=None):
+    """Archives for one note: an attachment pointing at its own text storage.
+
+    `paragraphs` splits `text` into paragraphs ("\n"-separated) with the
+    paragraph-style table starting each one.
+    """
+    starts, pos = [], 0
+    for part in text.split("\n"):
+        starts.append((pos, 1))
+        pos += len(part) + 1
+    return [(ref_id, T_ATTACHMENT, emit([(2, 2, E.ref_bytes(storage_id))])),
+            (storage_id, T_STORAGE, storage(text, {F_PARA_TBL: table(starts)}))]
 
 
 def write_pages(path, text, tables, with_changes=True, extra=()):

@@ -13,6 +13,7 @@ same zip → IWA → archive → storage path as a real document.
 | `test_edit_tables.py` | review findings 1.1–1.4: runs carried across paragraph deletion, inserted text isolated from preceding runs, empty tracked-change spans, comment ranges clamped; minimal direct replacements |
 | `test_footnotes.py` | footnote references (`\x0e` + attachment entry) are inline: reader paragraphs, editor bounds/starts/delete/retag, kitchen-sink sentence |
 | `test_samples.py` (`RealGuide`) | the real 14.5 guide: footnoted sentences whole, localised styles, lead-in emphasis, comments, edit/insert/format/delete round trips on a copy |
+| `test_footnotes.py` (`FootnotesAsMarkdown`) | `[^n]` references and definitions: order, multi-paragraph, skip/only, tracked deletion, JSON, plain |
 | `test_guard.py` | the Pages-open guard does not crash without `osascript` |
 | `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 
@@ -36,7 +37,7 @@ and the assertion that fails on today's code. **F** = needs a small fixture exte
 
 | Test | Setup → assertion |
 | --- | --- |
-| **S** `test_footnote_is_not_a_margin_note` | kitchen-sink and the real document: footnote storages are labelled `note1`/`note2` and rendered as `>` quotes → identified as footnotes (design decision: Markdown `[^1]` definitions?) |
+| `test_footnote_handles_keep_working` | the CLI still calls footnote storages `note1`… in `find`, `--where notes`, `-t storages`; decide later whether to add a `footnote1` alias |
 
 **S** = runs against a sample in `tests/samples/`.
 

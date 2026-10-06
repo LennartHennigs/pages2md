@@ -105,25 +105,38 @@ and `--in` / `--page` scope the listing like any other output.
 
 Timestamps are stored in UTC and shown in local time, which is what Pages displays.
 
-### Margin notes
+### Footnotes and margin notes
 
-The body flow is not the whole document. Margin notes — Pages' side-column
-annotations — live in their own text storages, each anchored into the body by an
-attachment table. A body-only reader skips them silently, which is what every
-DOCX/RTF export does.
+The body flow is not the whole document. Footnotes — and Pages' side-column margin
+notes — live in their own text storages, each anchored into the body by an attachment
+table. A body-only reader skips them silently, which is what every DOCX/RTF export does.
 
-Both tools reach them. `pages2md.py` places each note at its anchor and renders it as a
-blockquote:
+Both tools reach them. `pages2md.py` renders footnotes as Markdown footnotes: a `[^1]`
+where the reference stands, numbered in reading order, and the definitions at the end.
+A footnote with several paragraphs indents the later ones; a manual line break inside a
+note becomes a Markdown hard break:
 
 ```bash
-pages2md.py report.pages                      # notes inline (default)
-pages2md.py --sidenotes only report.pages     # just the notes
-pages2md.py --sidenotes skip report.pages     # body only, the old behaviour
+pages2md.py report.pages                      # footnotes as [^n] (default)
+pages2md.py --sidenotes only report.pages     # just the definitions
+pages2md.py --sidenotes skip report.pages     # body only, no references
 ```
 
 ```
-> See Appendix B for the full configuration reference.
+It works particularly well for *wicked problems*[^1] – ill-defined challenges.
+
+[^1]: For more details see: Camillus: Strategy as a Wicked Problem
 ```
+
+A reference that tracked changes delete takes its note with it (`--changes accept`), and
+numbers stay the same under `--in` / `--page`, so a section keeps the numbers it has in
+the whole document. JSON output carries `footnote` (a note's number) and `ref_nos` (the
+numbers of the references in a paragraph). Plain text drops the references. A note
+attached to anything other than a footnote reference, if one exists, is still printed
+as a `>` blockquote.
+
+The CLI still calls these storages `note1`, `note2`… (the name from before it was clear
+they were footnotes), in `find`, `--where` and `-t storages`.
 
 `pages_edit.py` searches and edits them too. Matches are tagged with the note they are in
 and the body offset they are anchored at, and page numbers come from that anchor:
