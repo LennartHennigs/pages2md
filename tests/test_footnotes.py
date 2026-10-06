@@ -73,11 +73,14 @@ class FootnoteIsInline(unittest.TestCase):
         doc = E.Document(self.path)
         self.assertEqual(doc.paragraph_starts(0, len(TEXT)), [0, SECOND, THIRD])
 
-    def test_delete_paragraph_removes_the_whole_sentence(self):
+    def test_deleting_a_paragraph_with_a_reference_is_refused(self):
+        # the note's storage would stay behind unreferenced; see Document.require_no_footnotes
         doc = E.Document(self.path)
-        doc.delete_paragraph(3)
-        self.assertEqual(doc.text()[0], "Second paragraph.\nThird.\n")
-        self.assertEqual(rows(doc, F_PARA_TBL), [(0, 2), (18, 1)])
+        self.assertEqual(doc.paragraph_bounds(3), (0, SECOND - 1))     # the whole sentence
+        with self.assertRaises(SystemExit) as cm:
+            doc.delete_paragraph(3)
+        self.assertIn("footnote reference", str(cm.exception))
+        self.assertEqual(doc.text()[0], TEXT)
 
     def test_retag_styles_the_whole_paragraph_once(self):
         doc = E.Document(self.path)

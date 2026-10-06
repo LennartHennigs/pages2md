@@ -13,12 +13,11 @@ change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md
 
 ## Bugs
 
-- [ ] Deleting a paragraph that holds a footnote reference leaves the note's storage
-      (`other1`) and its comment archives behind.
-- [ ] An empty final paragraph inherits the style and list level of its predecessor
-      (retag, insert at the end, delete the last paragraph). Deleting the last paragraph,
-      or one followed by a break character, leaves an empty paragraph where the preceding
-      separator should go.
+- [ ] Deleting a paragraph that holds a footnote reference is refused. Do it properly
+      (remove the note's storage, its attachment archive and any comments in it) once
+      Pages has been shown a file like that.
+- [ ] The empty paragraph after a final newline inherits its predecessor's style and list
+      level (retag, insert at the end). Needs a look at what Pages does.
 - [ ] A first comment is impossible in a document that has none yet.
 
 ## Features

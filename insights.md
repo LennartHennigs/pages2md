@@ -631,6 +631,18 @@ With the setting off, a plain `.bak` is written instead. Both belong in `.gitign
 - The meaning of a list's start-at value, of the restart table's `second` field, and what
   Pages does to restarts when the first item of a numbered list is deleted are unknown.
 - Whether a `\x0e` without an attachment entry is a section break has not been seen.
+- A paragraph that holds a footnote reference cannot be deleted: its note's storage and
+  archives (and any comment in it) would stay in the file unreferenced, and no document
+  like that has been opened in Pages. The tools refuse instead (`delete-paragraph`,
+  `import --replace-section`). What Pages itself does with the note when you delete the
+  sentence is the thing to look at on a Mac.
+- Deleting the last paragraph (no terminator of its own), or one that a page break or
+  object anchor ends, also removes the *previous* paragraph's newline; deleting only the
+  text left that newline in front of nothing, i.e. an empty paragraph. Checked on the
+  samples with the reader, not in Pages (`delete-before-anchor` is the harness case).
+- The empty paragraph after a final newline has no style entry of its own and so inherits
+  its predecessor's, including after a `retag` or an insert at the end. Whether Pages
+  does the same for a typed one has not been checked.
 
 ### An unresolved corruption in batch paragraph deletion
 

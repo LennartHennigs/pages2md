@@ -948,6 +948,25 @@ class Document:
         self._flow_cache = (msg, flow)
         return flow
 
+    def footnote_refs(self, lo, hi):
+        """Offsets of footnote references inside [lo, hi) of the selected storage."""
+        raw, flow = self.text()[0], self.flow()
+        return [i for i in range(lo, min(hi, len(raw)))
+                if raw[i] == "\x0e" and flow[i] != raw[i]]
+
+    def require_no_footnotes(self, lo, hi, what):
+        """Refuse to remove text that holds a footnote reference.
+
+        The note's own storage and its archives would stay behind unreferenced, and
+        nobody has opened such a document in Pages to see whether it copes.
+        """
+        refs = self.footnote_refs(lo, hi)
+        if refs:
+            sys.exit(f"cannot {what}: it holds {len(refs)} footnote reference(s) (at "
+                     f"{', '.join('@' + str(i) for i in refs[:3])}). Removing one would "
+                     "leave its note behind in the file. Delete the footnote in Pages "
+                     "first, or edit around it.")
+
     def paragraph_bounds(self, offset, raw=None):
         """(start, end) of the paragraph containing `offset`."""
         return para_bounds(self.flow(raw), offset)
@@ -1019,14 +1038,22 @@ class Document:
         self._require_single_chunk()
         raw = self.text()[0]
         start, end = self.paragraph_bounds(offset, raw)
+        cut = start
         if raw[end:end + 1] == PARA_END:    # its own terminator, not the
             end += 1                        # next paragraph's leading break
+        elif (start > 0 and raw[start - 1] == PARA_END
+              and (end == len(raw) or self.flow(raw)[end] in PARA_BREAKS)):
+            # Nothing terminates it: it is last, or a page break / anchor ends
+            # it. The previous paragraph's newline would be left in front of an
+            # empty paragraph, so it goes instead.
+            cut = start - 1
+        self.require_no_footnotes(start, end, "delete this paragraph")
         if end == start:
             # The empty slot PARA_SPLIT yields just before a page break or
             # anchor: nothing to delete. Carrying on would still write a
             # style entry onto the break character itself.
             return start, 0
-        delta = -(end - start)
+        delta = -(end - cut)
         bound = len(raw) + delta
         rebuilt = []
         for num, wire, val in tokenize(self._msg):
@@ -1043,17 +1070,17 @@ class Document:
                 leveled = indexed and num == F_LEVELS
                 carry_level = payload_at(val, end) if leveled else None
                 val = drop_entries_in(val, start, end)
-                val, _n = shift_table(val, start, end, delta)
+                val, _n = shift_table(val, cut, end, delta)
                 if styled:
-                    val = self._restate_following(val, start, keep, bound)
+                    val = self._restate_following(val, cut, keep, bound)
                 elif run:
-                    val = carry_run(val, start, carry, bound)
+                    val = carry_run(val, cut, carry, bound)
                 elif leveled:
-                    val = carry_payload(val, start, carry_level, bound)
+                    val = carry_payload(val, cut, carry_level, bound)
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
-        self._write_text(raw[:start] + raw[end:])
-        return start, delta
+        self._write_text(raw[:cut] + raw[end:])
+        return cut, delta
 
     def new_change(self, kind):
         """Clone a change archive with a fresh id, timestamp and UUID."""
@@ -2135,6 +2162,7 @@ def cmd_delete_para(args):
     doc = comment_preamble(args)
     start, end, _n, old = one_match(doc, args, args.on)
     raw, ps, pe = located_paragraph(doc, start)
+    doc.require_no_footnotes(ps, pe, "delete this paragraph")
     print(f"delete the paragraph at @{ps}:")
     print(f"  {show(raw[ps:pe][:110])!r}")
     if args.write:
@@ -2176,6 +2204,7 @@ def cmd_import(args):
         title, lo, hi = section_range(args.file, args.replace_section,
                                       len(doc.text()[0]))
         raw = doc.text()[0]
+        doc.require_no_footnotes(lo, hi, f"replace section {title!r}")
         going = doc.paragraph_starts(lo, hi)
         at = lo
         print(f"replace section {title!r} (chars {lo}-{hi}, "

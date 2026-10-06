@@ -63,6 +63,9 @@ Add each change here in the same commit that makes it.
 
 ### Changed
 
+- `delete-paragraph` and `import --replace-section` refuse text that holds a footnote
+  reference. They used to remove the reference and leave the note's storage and archives
+  behind, unreferenced; nobody has seen Pages open such a file.
 - **Offsets are UTF-16 code units**, as Pages stores them, so an emoji counts as two.
   This applies to `@123` offsets, `--at`, page bounds and `--in` ranges. Both tools
   work on a UTF-16 view of the text and convert back only to show or write it. An edit
@@ -120,6 +123,9 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- Deleting the last paragraph, or one that a page break or object anchor ends, left an empty
+  paragraph behind (the previous paragraph's newline in front of nothing). That newline
+  goes with it now.
 - Messages instead of tracebacks: a missing file, a folder, a zip that is not Pages, a
   package without `Index/Document.iwa` and damaged IWA data (both tools); an invalid
   regular expression or replacement group reference; an unreadable `--find-file`,

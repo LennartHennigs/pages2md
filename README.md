@@ -664,7 +664,7 @@ Then, on a Mac with Pages, the round-trip harness, which is the check that settl
 Pages accepts what the editor writes (see `tests/pages_roundtrip.py`):
 
 ```bash
-uv run python tests/pages_roundtrip.py all /tmp/roundtrip     # ~22 cases, a minute or two
+uv run python tests/pages_roundtrip.py all /tmp/roundtrip     # ~24 cases, a minute or two
 ```
 
 It copies the sample documents, applies each kind of write to a copy (replace, tracked

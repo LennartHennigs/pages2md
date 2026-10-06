@@ -252,11 +252,12 @@ class RealGuide(CopyCase):
         self.edit("delete-paragraph", "--on", "A new paragraph")
         self.assertEqual(markdown(self.path), before)
 
-    def test_delete_a_footnoted_paragraph_takes_its_sentence_whole(self):
-        self.edit("delete-paragraph", "--on", "driven by empathy")
-        md = markdown(self.path)
-        self.assertNotIn("human-centric", md)
-        self.assertNotIn("validated with users", md)
+    def test_delete_a_footnoted_paragraph_is_refused_and_writes_nothing(self):
+        before = markdown(self.path)
+        with self.assertRaises(SystemExit) as cm:
+            self.edit("delete-paragraph", "--on", "driven by empathy")
+        self.assertIn("footnote reference", str(cm.exception))
+        self.assertEqual(markdown(self.path), before)
 
 
 @unittest.skipUnless(os.path.exists(FORMATTING), "formatting.pages not present")

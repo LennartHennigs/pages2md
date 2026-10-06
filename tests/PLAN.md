@@ -20,6 +20,8 @@ same zip → IWA → archive → storage path as a real document.
 | `test_table_integrity.py` | tables stay sorted, one entry per index and inside the text after any edit (collapsed runs, tracked changes, comments, paragraph styles); the reader tolerates duplicates; `save` refuses ill-formed output; `verify` reads with the reader; seeded random replacements on every sample |
 | `test_search_text.py` | an empty search text is refused by every command that takes one, nothing is written; plan entries must hold strings; `^`, `$`, `\\b` still work |
 | `test_insert_boundaries.py` | inserting before or after a paragraph led or followed by `\\x04`/`\\x05`/`\\x0e` adds exactly one paragraph (unit cases, and `insert`/`import --before` on the real guide); a footnote reference is not a boundary |
+| `test_delete_boundaries.py` | deleting the last paragraph or one ended by a break character takes the previous newline; a paragraph with a footnote reference is refused (API, command, dry run) |
+| `test_robustness.py` | cyclic comment chains, zero-width match at the end with tracked deletions, comment over a line break, style names (`Body` → `Body 1`), `--where` rejected on structural commands, `--links`, messages instead of tracebacks (bad packages, regexes, input files) |
 | `test_guard.py` | the Pages-open guard does not crash without `osascript` |
 | `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 
