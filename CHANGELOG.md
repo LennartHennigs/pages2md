@@ -154,6 +154,16 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- Markdown: struck text (tracked deletions with `--changes mark`, strikethrough) that
+  partly overlaps bold or italic text or a link gave crossing markers (`**ab~~c**d~~`);
+  the spans are cut so the markers nest. Struck text is trimmed of surrounding spaces, so
+  `~~ 2~~` (which renders as plain text) is now ` ~~2~~`.
+- Markdown: a struck heading word that is also bold rendered as `~~**word**~~`; a
+  heading takes its weight from its style, so it is `~~word~~`.
+- Markdown: footnotes are numbered among the ones shown. A note whose reference is in
+  deleted text left a gap (`[^2]` with no `[^1]`).
+- `--links` printed a page computed from an offset in the wrong units (a note's link used
+  its anchor plus its position in the note); it is the page the paragraph starts on.
 - `^` and `$` in a regex search (`find`, `replace`, plans) matched at a footnote reference
   in the middle of a sentence; a footnote mark is not a line break.
 - A write whose result could not be read back at all (undecodable IWA data) got past the

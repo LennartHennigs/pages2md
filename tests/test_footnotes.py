@@ -168,6 +168,19 @@ class FootnotesAsMarkdown(unittest.TestCase):
         self.assertIn("> Aside.", md)
         self.assertNotIn("[^", md)
 
+    def test_numbers_have_no_gap_when_a_reference_is_deleted(self):
+        text = "One\x0e and two\x0e.\nThree\x0e.\n"
+        first = text.index("\x0e")
+        anchors = [(first, 1100), (text.index("\x0e", 5), 1101), (text.rindex("\x0e"), 1102)]
+        doc = self.doc(text, anchors, [footnote(1100, 1200, "\ufffc First."),
+                                       footnote(1101, 1201, "\ufffc Second."),
+                                       footnote(1102, 1202, "\ufffc Third.")],
+                       {F_DELETIONS: table([(first, 700), (first + 1, None)])})
+        self.assertEqual(self.md(doc), "One and two[^1].\n\nThree[^2].\n\n"
+                         "[^1]: Second.\n\n[^2]: Third.\n")
+        marked = self.md(doc, changes="mark")             # shown, so it keeps its number
+        self.assertIn("[^3]: Third.", marked)
+
     def test_deleted_reference_takes_its_note_with_it(self):
         dels = table([(MARK, 700), (MARK + 1, None)])
         doc = self.doc(TEXT, [(MARK, 1100)], [footnote(1100, 1200, "\ufffc N.")],

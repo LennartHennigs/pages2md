@@ -1,5 +1,5 @@
 """Markdown output: hyperlinks, ordered lists, tight lists, escaping."""
-import os, sys, tempfile, unittest
+import os, sys, tempfile, unittest, unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -304,6 +304,43 @@ class Escaping(unittest.TestCase):
 
     def test_plain_and_json_are_not_escaped(self):
         self.assertEqual(P.render_plain(None, [para("1. a * b")]), "1. a * b\n")
+
+
+class StrikeNestsWithEmphasisAndLinks(unittest.TestCase):
+    """A struck span that partly overlaps bold text or a link gave crossing markers."""
+
+    def test_struck_part_of_a_bold_run(self):
+        out = render(para("abcdefgh", runs=[(0, 5, True, False, False, False)], struck=[(3, 8)]))
+        self.assertEqual(out, "**abc**~~**de**fgh~~\n")
+
+    def test_bold_starting_inside_a_struck_span(self):
+        out = render(para("abcdefgh", runs=[(3, 8, True, False, False, False)], struck=[(0, 5)]))
+        self.assertEqual(out, "~~abc**de**~~**fgh**\n")
+
+    def test_struck_part_of_a_link(self):
+        out = render(para("a bc d", links=[(2, 4, "https://u")], struck=[(0, 3)]))
+        self.assertEqual(out, "~~a~~ [~~b~~c](https://u) d\n")
+
+    def test_strike_around_a_whole_link_still_nests_outside(self):
+        out = render(para("a bc d", links=[(2, 4, "https://u")], struck=[(0, 6)]))
+        self.assertEqual(out, "~~a [bc](https://u) d~~\n")
+
+
+class HeadingsTakeNoEmphasisMarkers(unittest.TestCase):
+    def test_a_struck_bold_heading_word_is_only_struck(self):
+        out = render(para("Title word", semantic="Heading 1",
+                          runs=[(6, 10, True, False, False, True)]))
+        self.assertEqual(out, "# Title ~~word~~\n")
+
+
+class LinksAreFoundOnTheirParagraphsPage(unittest.TestCase):
+    def test_a_note_link_uses_the_anchor_page_not_anchor_plus_offset(self):
+        doc = unittest.mock.Mock(path="/nonexistent/x.pages")
+        note = para("long note text with a link", offset=95, note=7,
+                    links=[(22, 26, "https://u")])
+        with unittest.mock.patch.object(P, "load_index", return_value=[0, 100]):
+            out = P.render_links(doc, [note])
+        self.assertIn("p.1  “link”", out)                 # 95 + 22 would say page 2
 
 
 if __name__ == "__main__":

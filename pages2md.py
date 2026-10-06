@@ -634,8 +634,9 @@ class PagesDoc:
                  for q in self.paragraphs(changes)]
         if notes == "skip":
             return paras
-        numbers = {a: n for n, (a, _sid) in enumerate(self.footnotes(), 1)}
         gone = self._dropped(self._body(), changes)
+        shown = [a for a, _sid in self.footnotes() if a not in gone]
+        numbers = {a: n for n, a in enumerate(shown, 1)}
         for q in paras:
             q["ref_nos"] = [numbers.get(a) for a in q["refs"]]
         found = [dict(para, offset=anchor, note=sid,
@@ -1097,11 +1098,21 @@ def _annotate(raw, runs, struck=(), links=(), escape=False):
     first used to shift the emphasis runs, which is why a paragraph with a
     marked deletion lost its bold. Where spans meet they nest strikethrough,
     then link, then emphasis: opens run outer to inner, closes inner to outer,
-    and a backslash escape goes right before its character. An emphasis run
-    that only partly overlaps a link is cut at the link's edge so the
-    markers still nest.
+    and a backslash escape goes right before its character. A span that only
+    partly overlaps a link is cut at the link's edges, and an emphasis run is
+    also cut at the edges of struck text, so the markers always nest; a struck
+    piece inside a link nests inside it.
     """
-    marks = []                          # (pos, rank, depth, text)
+    marks = []                          # (pos, rank, depth, text); rank: 0 close, 1 open, 2 escape
+    spans = []
+    for a, b, url in links:
+        seg = raw[a:b]
+        if not _clean(seg.strip(), False):
+            continue
+        s = a + len(seg) - len(seg.lstrip())
+        e = b - (len(seg) - len(seg.rstrip()))
+        marks += [(s, 1, 1, "["), (e, 0, 1, "](" + _link_target(url) + ")")]
+        spans.append((s, e))
     # struck text: tracked deletions and strikethrough formatting alike, so
     # overlapping or touching spans become one ~~...~~
     struck_spans = sorted([*struck, *((r[0], r[1]) for r in runs
@@ -1112,32 +1123,16 @@ def _annotate(raw, runs, struck=(), links=(), escape=False):
             merged[-1][1] = max(merged[-1][1], b)
         else:
             merged.append([a, b])
-    for a, b in merged:                 # rank: 0 close, 1 open, 2 escape
-        if raw[a:b].strip():
-            marks += [(a, 1, 0, "~~"), (b, 0, 0, "~~")]
-    spans = []
-    for a, b, url in links:
-        seg = raw[a:b]
-        if not _clean(seg.strip(), False):
-            continue
-        s = a + len(seg) - len(seg.lstrip())
-        e = b - (len(seg) - len(seg.rstrip()))
-        marks += [(s, 1, 1, "["), (e, 0, 1, "](" + _link_target(url) + ")")]
-        spans.append((s, e))
+    pieces = []
+    for a, b in merged:
+        for x, y in _cut(raw, a, b, spans):
+            inside = any(s <= x and y <= e for s, e in spans)
+            depth = 1.5 if inside else 0             # within a link, inside its brackets
+            marks += [(x, 1, depth, "~~"), (y, 0, depth, "~~")]
+            pieces.append((x, y))
     for start, end, mark in _merged_marks(raw, runs):
-        cuts = set()
-        for s, e in spans:
-            if start <= s and e <= end or s <= start and end <= e:
-                continue                # one wholly inside the other: nests
-            cuts.update(c for c in (s, e) if start < c < end)
-        points = [start, *sorted(cuts), end]
-        for a, b in zip(points, points[1:]):
-            seg = raw[a:b]
-            if not _clean(seg.strip(), False):
-                continue
-            lead = len(seg) - len(seg.lstrip())
-            trail = len(seg) - len(seg.rstrip())
-            marks += [(a + lead, 1, 2, mark), (b - trail, 0, 2, mark)]
+        for x, y in _cut(raw, start, end, spans + pieces):
+            marks += [(x, 1, 2, mark), (y, 0, 2, mark)]
     if escape:
         marks += [(i, 2, 3, "\\") for i in _escape_positions(raw)]
     marks.sort(key=lambda m: (m[0], m[1], -m[2] if m[1] == 0 else m[2]),
@@ -1148,6 +1143,25 @@ def _annotate(raw, runs, struck=(), links=(), escape=False):
         end = pos
     pieces.append(raw[:end])
     return "".join(reversed(pieces))
+
+
+def _cut(raw, start, end, spans):
+    """[start, end) cut at the edges of every span it only partly overlaps, each piece
+    trimmed of surrounding whitespace (a marker next to a space does not close);
+    pieces with nothing visible are dropped."""
+    cuts = set()
+    for s, e in spans:
+        if start <= s and e <= end or s <= start and end <= e:
+            continue                    # one wholly inside the other: nests
+        cuts.update(c for c in (s, e) if start < c < end)
+    points = [start, *sorted(cuts), end]
+    out = []
+    for a, b in zip(points, points[1:]):
+        seg = raw[a:b]
+        if not _clean(seg.strip(), False):
+            continue
+        out.append((a + len(seg) - len(seg.lstrip()), b - (len(seg) - len(seg.rstrip()))))
+    return out
 
 
 def _place_refs(text, numbers):
@@ -1173,7 +1187,8 @@ def render_markdown(doc, paras):
     for p in paras:
         raw = p["raw"]
         if HEADING.get(p["semantic"]):
-            p = {**p, "runs": [r for r in p["runs"] if len(r) > 5 and r[5]]}
+            p = {**p, "runs": [(r[0], r[1], False, False, *r[4:]) for r in p["runs"]
+                               if len(r) > 5 and r[5]]}
             # a heading's weight is its style, not markup
         body = _clean(_place_refs(
             _annotate(raw, p["runs"], p.get("struck", []), p.get("links", []),
@@ -1291,12 +1306,17 @@ def render_comments(doc, paras):
 
 
 def render_links(doc, paras):
-    """Every hyperlink: page (when an index exists), the linked text, the URL."""
+    """Every hyperlink: page (when an index exists), the linked text, the URL.
+
+    The page is the one the paragraph starts on (for a note, its anchor's): a link's
+    offset inside the paragraph counts characters of the rendered text, which is not
+    the body's UTF-16 offset space the index uses.
+    """
     bounds = load_index(doc.path)
     rows = []
     for p in paras:
         for a, b, url in p.get("links", []):
-            page = page_of(bounds, p["offset"] + a)
+            page = page_of(bounds, p["offset"])
             where = f"p.{page}  " if page else ""
             rows.append(f"{where}“{' '.join(show(p['raw'][a:b]).split())}”  {url}")
     if not rows:
