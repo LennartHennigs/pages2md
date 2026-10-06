@@ -47,6 +47,9 @@ T_TOC = 2240                  # owns the generated table of contents
 T_LIST_STYLE = 2023
 F_TEXT, F_PARA_TBL, F_LIST_TBL, F_CHAR_TBL = 3, 5, 7, 8
 F_INSERTIONS, F_DELETIONS = 21, 22
+F_SMARTFIELD = 11             # char index -> smart field (hyperlink, ...), run-length
+T_HYPERLINK = 2032            # a hyperlink smart field; field 2 is the URL
+F_PARA_STARTS = 14            # list restarts: entry {index, first, second}
 F_ATTACHMENTS = 16            # char index -> attachment archive (type 2008)
 T_ATTACHMENT = 2008
 F_ATTACHED_STORAGE = 2        # the attachment's reference to its storage
@@ -388,6 +391,49 @@ class PagesDoc:
             out.append((ef.get(1, [0])[0], _ref(ef[2][0]) if 2 in ef else None))
         return sorted(out)
 
+    def list_kind(self, ref):
+        """"bullet", "numbered" or None for a list-style archive.
+
+        Read from the style's label type for its first level (0 none, 1 image,
+        2 bullet text, 3 numbered), not from its name: "Lettered", "Harvard"
+        and "Numbered" are all numbered, and names are what a user renames.
+        """
+        m = self.arcs.get(ref, (None, None))[1] if ref is not None else None
+        if not m:
+            return None
+        code = parse_fields(m).get(11, [0])[0]
+        return {0: None, 3: "numbered"}.get(code, "bullet")
+
+    def _list_starts(self, f):
+        """Paragraph offsets where a list restarts (para-starts `first` is 1)."""
+        if F_PARA_STARTS not in f:
+            return set()
+        out = set()
+        for e in parse_fields(f[F_PARA_STARTS][0]).get(1, []):
+            ef = parse_fields(e)
+            if ef.get(2, [0])[0] == 1:
+                out.add(ef.get(1, [0])[0])
+        return out
+
+    def _links(self, f, text):
+        """[(start, end, url)] for the hyperlinks of one storage.
+
+        The smart-field table is run-length like the change tables: an entry
+        runs to the next one, and a null entry ends it. Other kinds of smart
+        field (dates, page numbers) share the table and are ignored.
+        """
+        tbl = self._table(f, F_SMARTFIELD)
+        out = []
+        for k, (idx, ref) in enumerate(tbl):
+            info = self.arcs.get(ref) if ref is not None else None
+            if not info or info[0] != T_HYPERLINK:
+                continue
+            url = parse_fields(info[1]).get(2, [b""])[0].decode("utf-8", "replace")
+            end = tbl[k + 1][0] if k + 1 < len(tbl) else len(text)
+            if url and end > idx:
+                out.append((idx, end, url))
+        return out
+
     def inline_marks(self, f, text):
         """Offsets of footnote references: \\x0e with an attachment entry."""
         return {i for i, ref in self._table(f, F_ATTACHMENTS)
@@ -459,6 +505,8 @@ class PagesDoc:
         m_idx = [a for a, _ in marks]
         m_ends = sorted(b for _a, b in marks)
         refs_here = self.inline_marks(f, text)
+        links_all = self._links(f, text)
+        list_starts = self._list_starts(f)
         p_idx = [i for i, _ in para_tbl]
         c_idx = [i for i, _ in char_tbl]
 
@@ -472,7 +520,10 @@ class PagesDoc:
             raw = text[pos:pos + len(chunk)]
             width = len(raw)      # advance by the ORIGINAL width; `raw` may shrink
             name, semantic = self.style(lookup(para_tbl, p_idx, pos))
-            bullet = self.style(lookup(list_tbl, l_idx, pos))[1]
+            lref = lookup(list_tbl, l_idx, pos)
+            bullet = self.style(lref)[1]
+            kind = self.list_kind(lref) if (bullet or "").split(
+                "liststyle-")[-1] != "None" else None
             runs = []
             k = max(bisect.bisect_right(c_idx, pos) - 1, 0)
             while k < len(char_tbl) and char_tbl[k][0] < pos + len(raw):
@@ -483,6 +534,8 @@ class PagesDoc:
                 if (b or i_ or u) and min(end, pos + len(raw)) > start:
                     runs.append((start - pos, min(end, pos + len(raw)) - pos, b, i_, u))
                 k += 1
+            links = [(max(a, pos) - pos, min(b, pos + len(raw)) - pos, url)
+                     for a, b, url in links_all if b > pos and a < pos + len(raw)]
             if drop:
                 keep = [k for k in range(len(raw)) if pos + k not in drop]
                 remap = {}
@@ -497,6 +550,13 @@ class PagesDoc:
                     if ne > ns:
                         shifted.append((ns, ne, b, i_, u))
                 runs = shifted
+                moved = []
+                for s, e, url in links:
+                    ns = remap.get(s, bisect.bisect_left(keep, s))
+                    ne = remap.get(e, bisect.bisect_left(keep, e))
+                    if ne > ns:
+                        moved.append((ns, ne, url))
+                links = moved
             struck = []
             if marks:
                 # bisect the span *ends* so a long span starting far back is
@@ -512,11 +572,13 @@ class PagesDoc:
                 m = u16_index_map(raw)
                 runs = [(m[a], m[b], *rest) for a, b, *rest in runs]
                 struck = [(m[a], m[b]) for a, b in struck]
+                links = [(m[a], m[b], url) for a, b, url in links]
                 raw = show(raw)
             refs = [m for m in sorted(refs_here)
                     if pos <= m < pos + width and m not in drop]
             out.append(dict(offset=pos, raw=raw, style=name, struck=struck,
-                            refs=refs,
+                            refs=refs, links=links, list_kind=kind,
+                            list_start=pos in list_starts,
                             list=(bullet or "").split("liststyle-")[-1] or None,
                             semantic=(semantic or "").split("paragraphstyle-")[-1],
                             runs=runs))
@@ -914,27 +976,101 @@ def _merged_marks(raw, runs):
     return out
 
 
-def _annotate(raw, runs, struck=()):
-    """Put Markdown emphasis and ~~strikethrough~~ markers around spans of `raw`.
+_ENTITY = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);")
+_LINE_START = ((re.compile(r"#{1,6}(?:\s|$)"), 0),     # heading
+               (re.compile(r">"), 0),                  # block quote
+               (re.compile(r"[-+](?:\s|$)"), 0),        # bullet
+               (re.compile(r"\d{1,9}(?=[.)](?:\s|$))"), None),   # "1." item
+               (re.compile(r"(?:=+|-{3,})\s*$"), 0))   # setext / thematic break
+
+
+def _escape_positions(raw):
+    """Offsets in `raw` that need a backslash to stay literal text in Markdown.
+
+    Conservative on purpose: characters that only matter in some places
+    (underscores inside words, a lone < or &, a single ~) are left alone, so
+    ordinary prose is not littered with backslashes.
+    """
+    out = set()
+    for i, c in enumerate(raw):
+        prv, nxt = raw[i - 1:i] if i else "", raw[i + 1:i + 2]
+        if c in "\\*`[]":
+            out.add(i)
+        elif c == "_" and not (prv.isalnum() and nxt.isalnum()):
+            out.add(i)
+        elif c == "<" and nxt and (nxt.isalpha() or nxt in "/!?"):
+            out.add(i)
+        elif c == "&" and _ENTITY.match(raw, i):
+            out.add(i)
+        elif c == "~" and (nxt == "~" or prv == "~"):
+            out.add(i)
+    # what would turn a line into a heading, quote, list item or rule
+    starts = [0] + [k + 1 for k, c in enumerate(raw) if c == LINE_SEP]
+    for start in starts:
+        j = start
+        while j < len(raw) and (raw[j].isspace() or raw[j] in CONTROL):
+            j += 1
+        end = raw.find(LINE_SEP, j)
+        line = raw[j:end if end >= 0 else len(raw)]
+        for pattern, where in _LINE_START:
+            m = pattern.match(line)
+            if m:
+                out.add(j + (m.end() if where is None else where))
+                break
+    return out
+
+
+def _link_target(url):
+    """A link destination, in <...> when it holds spaces or brackets."""
+    if any(c in url for c in " ()<>"):
+        return "<" + url.replace("<", "%3C").replace(">", "%3E") + ">"
+    return url
+
+
+def _annotate(raw, runs, struck=(), links=(), escape=False):
+    """Put Markdown emphasis, links and ~~strikethrough~~ around spans of `raw`.
 
     All positions refer to the original text, so every marker is collected
     first and inserted right-to-left in one pass -- inserting strike markers
     first used to shift the emphasis runs, which is why a paragraph with a
-    marked deletion lost its bold. Where spans meet, strikethrough is the
-    outer layer: opens run outer to inner, closes inner to outer.
+    marked deletion lost its bold. Where spans meet they nest strikethrough,
+    then link, then emphasis: opens run outer to inner, closes inner to outer,
+    and a backslash escape goes right before its character. An emphasis run
+    that only partly overlaps a link is cut at the link's edge so the
+    markers still nest.
     """
-    marks = []                                    # (pos, closing, depth, text)
-    for a, b in struck:
+    marks = []                          # (pos, rank, depth, text)
+    for a, b in struck:                 # rank: 0 close, 1 open, 2 escape
         if raw[a:b].strip():
-            marks += [(a, False, 0, "~~"), (b, True, 0, "~~")]
+            marks += [(a, 1, 0, "~~"), (b, 0, 0, "~~")]
+    spans = []
+    for a, b, url in links:
+        seg = raw[a:b]
+        if not _clean(seg.strip(), False):
+            continue
+        s = a + len(seg) - len(seg.lstrip())
+        e = b - (len(seg) - len(seg.rstrip()))
+        marks += [(s, 1, 1, "["), (e, 0, 1, "](" + _link_target(url) + ")")]
+        spans.append((s, e))
     for start, end, mark in _merged_marks(raw, runs):
-        seg = raw[start:end]
-        lead = len(seg) - len(seg.lstrip())
-        trail = len(seg) - len(seg.rstrip())
-        marks += [(start + lead, False, 1, mark), (end - trail, True, 1, mark)]
-    marks.sort(key=lambda m: (m[0], 0 if m[1] else 1, -m[2] if m[1] else m[2]),
+        cuts = set()
+        for s, e in spans:
+            if start <= s and e <= end or s <= start and end <= e:
+                continue                # one wholly inside the other: nests
+            cuts.update(c for c in (s, e) if start < c < end)
+        points = [start, *sorted(cuts), end]
+        for a, b in zip(points, points[1:]):
+            seg = raw[a:b]
+            if not _clean(seg.strip(), False):
+                continue
+            lead = len(seg) - len(seg.lstrip())
+            trail = len(seg) - len(seg.rstrip())
+            marks += [(a + lead, 1, 2, mark), (b - trail, 0, 2, mark)]
+    if escape:
+        marks += [(i, 2, 3, "\\") for i in _escape_positions(raw)]
+    marks.sort(key=lambda m: (m[0], m[1], -m[2] if m[1] == 0 else m[2]),
                reverse=True)
-    for pos, _closing, _depth, text in marks:
+    for pos, _rank, _depth, text in marks:
         raw = raw[:pos] + text + raw[pos:]
     return raw
 
@@ -954,35 +1090,56 @@ def _place_refs(text, numbers):
 
 
 def render_markdown(doc, paras):
-    lines, notes = [], {}
+    """Markdown for a list of paragraph dicts.
+
+    Consecutive items of one list are a tight list; numbered items count up
+    from 1, restarting after any other paragraph or where Pages restarts the
+    list. Footnote definitions are collected at the end.
+    """
+    blocks, notes = [], {}              # blocks: [(text, list kind or None)]
+    counter, prev = 0, None             # numbering state: last item's kind
     for p in paras:
         raw = p["raw"]
         if HEADING.get(p["semantic"]):
             p = {**p, "runs": []}      # a heading's weight is its style, not markup
         body = _clean(_place_refs(
-            _annotate(raw, p["runs"], p.get("struck", [])),
+            _annotate(raw, p["runs"], p.get("struck", []), p.get("links", []),
+                      escape=True),
             p.get("ref_nos", [])))
         if not body:
             continue
         level = HEADING.get(p["semantic"])
+        kind = (p["list_kind"] if "list_kind" in p else
+                None if p.get("list") in (None, "None") else "bullet")
         if p.get("footnote"):
             # definitions go at the end; a note's later paragraphs are indented
             # (a manual line break inside a note becomes a hard break)
             notes.setdefault(p["footnote"], []).append(
                 body.replace("\n", "  \n    "))
         elif p.get("sidenote"):
-            lines.append("> " + body.replace("\n", "\n> "))
+            blocks.append(("> " + body.replace("\n", "\n> "), None))
         elif level:
-            lines.append("#" * level + " " + body.replace("\n", " "))
-        elif p["list"] and p["list"] != "None":
-            lines.append("- " + body.replace("\n", " "))
+            blocks.append(("#" * level + " " + body.replace("\n", " "), None))
+            prev = None
+        elif kind == "numbered":
+            counter = counter + 1 if prev == "numbered" and not p.get("list_start") else 1
+            blocks.append((f"{counter}. " + body.replace("\n", " "), kind))
+            prev = kind
+        elif kind:
+            blocks.append(("- " + body.replace("\n", " "), kind))
+            prev = kind
         else:
-            lines.append(body.replace("\n", "  \n"))   # LS -> hard break
+            blocks.append((body.replace("\n", "  \n"), None))   # LS -> hard break
+            prev = None
     for n in sorted(notes):
         first, *rest = notes[n]
-        lines.append(f"[^{n}]: {first}")
-        lines.extend("    " + more for more in rest)
-    return "\n\n".join(lines) + "\n"
+        blocks.append((f"[^{n}]: {first}", None))
+        blocks.extend(("    " + more, None) for more in rest)
+    out = ""
+    for k, (text, kind) in enumerate(blocks):
+        out += ("" if k == 0 else "\n" if kind and kind == blocks[k - 1][1]
+                else "\n\n") + text
+    return out + "\n"
 
 
 def render_plain(doc, paras):

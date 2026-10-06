@@ -169,7 +169,8 @@ class KitchenSink(unittest.TestCase):
     def test_headings_and_lists(self):
         md = markdown(KITCHEN)
         for line in ("# Heading 1", "## Heading 2", "### Heading 3",
-                     "- A bulleted", "- A numbered one"):
+                     "- This\n- Is\n- A bulleted\n- list",
+                     "1. This\n2. Is\n3. A numbered one"):
             self.assertIn(line + "\n", md)
 
     def test_tracked_changes(self):
@@ -201,7 +202,10 @@ class RealGuide(CopyCase):
                       "straightforward, clear-cut approaches.\n\n", md)
         self.assertNotIn("\n\n– ill-defined", md)      # the old split
         self.assertIn("validated with users[^2] .\n", md)
-        self.assertIn("\n\n[^1]: For more details see: Camillus:", md)
+        self.assertIn("\n\n[^1]: For more details see: Camillus: "
+                      "[Strategy as a Wicked Problem](https://lennarthennigs.de/dtw/01)"
+                      " and Kolko: [Wicked Problems, Problems Worth Solving]"
+                      "(https://lennarthennigs.de/dtw/10)\n", md)
         # footnote 2 has a manual line break inside it: a hard break, indented
         self.assertIn("\n\n[^2]: Because Design Thinking", md)
         self.assertIn("'humans'.", md)

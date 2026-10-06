@@ -27,6 +27,16 @@ Add each change here in the same commit that makes it.
   `emoji.pages` and `kitchen-sink.pages` (Pages 15.4) and `sample-content.pages`
   (Pages 14.5, a German-localised guide with footnotes; the comment author is replaced
   with "Sample Author"). `tests/samples/README.md` says what each contains.
+- Hyperlinks render as `[text](url)` (a URL with spaces or parentheses goes in `<...>`).
+  They are read from the smart-field table of every storage, so links inside footnotes
+  work too. JSON paragraphs carry `links`.
+- Numbered lists render as `1.`, `2.`, … — counting up, restarting after any other
+  paragraph or where Pages restarts the list. Whether a list style is bulleted or numbered
+  comes from its label type, so Lettered, Harvard and renamed styles work. JSON
+  paragraphs carry `list_kind` and `list_start`.
+- A "Not considered yet" section in the README (images, tables, nested lists, text
+  boxes, headers and footers, character and paragraph formatting, …), and a wish list
+  for a sample document in `tests/samples/README.md`.
 - This changelog.
 
 ### Changed
@@ -52,6 +62,12 @@ Add each change here in the same commit that makes it.
   names the storages it was found in.
 - `revert` writes through a temporary file, so a failure cannot leave a half-written
   document.
+- Markdown lists are tight: consecutive items of one list have no blank line between them.
+  Numbered items used to come out as `-`.
+- Markdown output escapes text that would turn into markup (`*`, `` ` ``, `[`, `]`, `\`,
+  `<tag>`, `&entity;`, `~~`, non-word underscores, and lines that begin like a heading,
+  quote, list item or rule). Prose and `snake_case` are unchanged. `plain` and `json`
+  are not escaped.
 - The Markdown importer needs text right inside `*`/`**` markers and an underscore at a
   word edge before it counts as emphasis.
 - Documentation: `insights.md` records the UTF-16 offsets, the footnote marker, and how

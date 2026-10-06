@@ -45,3 +45,28 @@ headings 1–2, bold and italic lead-ins, two footnotes (Footnote Text style), t
 on headings, localised style names ("Text", "Überschrift", "Fußnote"). It found the
 footnote paragraph-splitting bug. The comment author's name was replaced with "Sample
 Author"; the text and two hyperlinks are unchanged.
+
+## Wanted: `fidelity.pages`
+
+What would let `pages2md.py` cover the rows of README ▸ *Not considered yet*. One document,
+throwaway text, English, saved by Pages from the Blank template:
+
+1. A **bulleted list nested three levels deep**, then a **numbered list nested three
+   levels deep**, then a bullet list nested under a numbered item. Add one numbered list
+   that **starts at 5**, and a second numbered list directly after another that
+   **continues** its numbering.
+2. A **table** (3 columns × 3 rows, header row, one cell with two lines of text, one
+   merged cell).
+3. An **image** with a caption (a small PNG), and one image inside a paragraph (inline).
+4. A **hyperlink in the body text**, one on a whole word and one on a part of a bold word.
+5. **Inline formatting**: underline, strikethrough, superscript, subscript, a monospace
+   font, a coloured word.
+6. **Paragraph styles**: Title, Subtitle, Block Quote, Caption, and one custom style.
+7. A **text box** and a **shape** with text, placed on the page.
+8. A **header and footer** with a page number.
+9. A **section break** and a **page break**, and one **endnote** (Insert ▸ Footnote can be
+   switched to endnotes in Document ▸ Footnotes & Endnotes).
+10. A line with characters that look like Markdown: `1. not a list`, `# not a heading`,
+    `*stars*`, `_under_`, `[brackets]`.
+
+Items 1–4 are the most useful; the rest can come in separate, smaller files.

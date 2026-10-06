@@ -161,6 +161,22 @@ goes back through `from_u16` only to be shown or written. Offsets the tools prin
 (`@123`) are in these units too, so they agree with Pages' tables and with each other.
 An edit whose boundary falls between the two halves of a pair is refused.
 
+### Hyperlinks, list kinds and list restarts
+
+- **Hyperlinks** are field 11 of a text storage, a run-length smart-field table: an
+  entry points at a `type 2032` archive and runs to the next entry, a null entry ends
+  it. The archive's field 1 is a UUID string, field 2 the URL. Other smart fields (dates,
+  page numbers) share the table with other archive types. In `sample-content.pages` the
+  only links are in a footnote, so they live in that footnote's storage, not the body's.
+- **List kind** is the first label type of the list-style archive (field 11, one value per
+  level): 0 none, 1 image, 2 bullet text, 3 numbered. "Lettered", "Numbered" and "Harvard"
+  are all 3. The semantic names in field 1 stay English in a German document, but the
+  label type is what to trust.
+- **List restarts** are field 14, entries `{index, first, second}`: `first = 1` at the
+  paragraph that starts a list, `0` at the next one to say "continue". Not read: any
+  start-at value (probably `second`), and the nesting level (not located; nobody has
+  made a sample with nested lists yet).
+
 ## How I Got This Wrong
 
 Worth recording, because the failure mode is specific to this format.
