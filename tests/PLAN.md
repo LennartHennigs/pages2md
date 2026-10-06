@@ -11,6 +11,8 @@ same zip → IWA → archive → storage path as a real document.
 | `test_codec.py` | varint, protobuf, Snappy, IWA chunking and archive framing round-trips |
 | `test_format.py` | review finding 1.5: `format` produces one clean run, `--plain`, new tables, no re-parse |
 | `test_edit_tables.py` | review findings 1.1–1.4: runs carried across paragraph deletion, inserted text isolated from preceding runs, empty tracked-change spans, comment ranges clamped; minimal direct replacements |
+| `test_footnotes.py` | footnote references (`\x0e` + attachment entry) are inline: reader paragraphs, editor bounds/starts/delete/retag, kitchen-sink sentence |
+| `test_guard.py` | the Pages-open guard does not crash without `osascript` |
 | `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 
 ## Planned
@@ -33,8 +35,7 @@ and the assertion that fails on today's code. **F** = needs a small fixture exte
 
 | Test | Setup → assertion |
 | --- | --- |
-| **S** `test_footnote_marker_does_not_split_paragraph` | kitchen-sink: the footnote reference is `\x0e`, which `PARA_BREAKS` treats as a section break, so "What about a footnote" and "?" render as two paragraphs → one paragraph |
-| **S** `test_footnote_is_not_a_margin_note` | kitchen-sink: the footnote storage (attachment at 127) is labelled `note1` and rendered as a `>` quote → identified and rendered as a footnote |
+| **S** `test_footnote_is_not_a_margin_note` | kitchen-sink and the real document: footnote storages are labelled `note1`/`note2` and rendered as `>` quotes → identified as footnotes (design decision: Markdown `[^1]` definitions?) |
 
 **S** = runs against a sample in `tests/samples/`.
 

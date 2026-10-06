@@ -857,7 +857,7 @@ class Document:
         """
         self._require_single_chunk()
         raw = self.text()[0]
-        start, _end = para_bounds(raw, offset)
+        start, _end = self.paragraph_bounds(offset)
         after = min(_end + 1, len(raw))
         rebuilt = []
         for num, wire, val in tokenize(self._msg):
@@ -873,11 +873,26 @@ class Document:
         self._msg = emit(rebuilt)
         return start
 
+    def flow(self):
+        """The selected storage's text with footnote references neutralised.
+
+        Paragraph boundaries are found on this view (see pages2md.flow_view);
+        the real text is still what gets edited.
+        """
+        raw = self.text()[0]
+        val = parse_fields_of(self._msg).get(F_ATTACHMENTS, [None])[0]
+        return flow_view(raw, {i for i, ref, _s in entry_rows(val)
+                               if ref is not None
+                               and raw[i:i + 1] == FOOTNOTE_MARK})
+
+    def paragraph_bounds(self, offset):
+        """(start, end) of the paragraph containing `offset`."""
+        return para_bounds(self.flow(), offset)
+
     def paragraph_starts(self, lo, hi):
         """Offsets of every paragraph beginning inside [lo, hi)."""
-        raw = self.text()[0]
         out, pos = [], 0
-        for chunk in PARA_SPLIT.split(raw):
+        for chunk in PARA_SPLIT.split(self.flow()):
             if lo <= pos < hi:
                 out.append(pos)
             pos += len(chunk) + 1
@@ -936,7 +951,7 @@ class Document:
         """Remove the paragraph containing `offset`, newline included."""
         self._require_single_chunk()
         raw = self.text()[0]
-        start, end = para_bounds(raw, offset)
+        start, end = self.paragraph_bounds(offset)
         if raw[end:end + 1] == PARA_END:    # its own terminator, not the
             end += 1                        # next paragraph's leading break
         if end == start:
@@ -1160,7 +1175,8 @@ from pages2md import (outline, section_range, index_path, load_index,
                       F_TEXT, F_PARA_TBL, F_LIST_TBL, F_COMMENTS,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS_RUN,
                       C_TEXT, C_DATE, C_AUTHOR, C_NEXT, APPLE_EPOCH,
-                      PARA_BREAKS, PARA_SPLIT,
+                      PARA_BREAKS, PARA_SPLIT, F_ATTACHMENTS, FOOTNOTE_MARK,
+                      flow_view,
                       # text is handled as a UTF-16 view; see pages2md
                       u16, from_u16, show)
 from pages2md import _ref as ref_of   # skip a TSP.Reference's tag byte, read the varint
@@ -1847,7 +1863,7 @@ def located_paragraph(doc, start):
     describe or act on "the paragraph the user pointed at".
     """
     raw = doc.select("body").text()[0]
-    ps, pe = para_bounds(raw, start)
+    ps, pe = doc.paragraph_bounds(start)
     return raw, ps, pe
 
 
@@ -1965,7 +1981,7 @@ def cmd_import(args):
               f"{len(going)} paragraph(s)) with {len(blocks)} from "
               f"{args.markdown}:")
         for s in going[:3]:
-            _a, b = para_bounds(raw, s)
+            _a, b = doc.paragraph_bounds(s)
             print(f"  - {show(raw[s:b][:66])!r}")
         if len(going) > 3:
             print(f"  - …and {len(going) - 3} more")

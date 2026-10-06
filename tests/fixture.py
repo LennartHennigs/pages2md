@@ -12,7 +12,7 @@ from iwa_codec import emit, write_varint, pack_archives, iwa_encode, read_varint
 import pages_edit as E
 from pages2md import (T_STORAGE, T_CHAR_STYLE, P_BOLD, P_ITALIC, F_PROPS,
                       F_TEXT, F_PARA_TBL, F_LIST_TBL, F_CHAR_TBL,
-                      F_INSERTIONS, F_DELETIONS, F_COMMENTS)
+                      F_INSERTIONS, F_DELETIONS, F_COMMENTS, F_ATTACHMENTS)
 
 BODY_ID = 100
 DEL_TEMPLATE_ID, INS_TEMPLATE_ID = 200, 201

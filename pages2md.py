@@ -388,6 +388,11 @@ class PagesDoc:
             out.append((ef.get(1, [0])[0], _ref(ef[2][0]) if 2 in ef else None))
         return sorted(out)
 
+    def inline_marks(self, f, text):
+        """Offsets of footnote references: \\x0e with an attachment entry."""
+        return {i for i, ref in self._table(f, F_ATTACHMENTS)
+                if ref is not None and text[i:i + 1] == FOOTNOTE_MARK}
+
     def _styles(self, f, field):
         """Style table, keeping only entries that actually set a style."""
         return [(i, r) for i, r in self._table(f, field) if r is not None]
@@ -450,8 +455,10 @@ class PagesDoc:
             k = bisect.bisect_right(idx, i) - 1
             return tbl[k][1] if k >= 0 else None
 
+        flow = flow_view(text, self.inline_marks(f, text))
         out, pos = [], 0
-        for raw in PARA_SPLIT.split(text):
+        for chunk in PARA_SPLIT.split(flow):
+            raw = text[pos:pos + len(chunk)]
             width = len(raw)      # advance by the ORIGINAL width; `raw` may shrink
             name, semantic = self.style(lookup(para_tbl, p_idx, pos))
             bullet = self.style(lookup(list_tbl, l_idx, pos))[1]
@@ -707,8 +714,11 @@ def pages_has_open(doc):
     `name` drops the extension, which made an earlier basename check useless.
     System Events is asked first so we never launch Pages just to find out.
     """
-    res = subprocess.run(["osascript", "-e", GUARD],
-                         capture_output=True, text=True)
+    try:
+        res = subprocess.run(["osascript", "-e", GUARD],
+                             capture_output=True, text=True)
+    except FileNotFoundError:
+        return False                  # no osascript, so no Pages to conflict
     if res.returncode:
         return False
     out = res.stdout.strip()
@@ -803,13 +813,33 @@ def page_range(doc, spec, text_len):
 HEADING = {"Heading 1": 1, "Heading 2": 2, "Heading 3": 3, "Heading 4": 4,
            "Title": 1, "Subtitle": 2}
 # \n ends a paragraph; \x04 (page break), \x05 (object anchor) and \x0e
-# (section break) lead one. Splitting on all four keeps paragraph start
+# (section break, unless it is a footnote reference: see flow_view) lead one.
+# Splitting on all four keeps paragraph start
 # offsets aligned with the sparse style tables. Exported so pages_edit.py
 # locates paragraph boundaries by the identical rule -- a second, separately
 # maintained definition is exactly how the reader and the editor end up
 # disagreeing about where a paragraph starts.
 PARA_BREAKS = "\n\x04\x05\x0e"
 PARA_SPLIT = re.compile(f"[{re.escape(PARA_BREAKS)}]")
+FOOTNOTE_MARK = "\x0e"
+
+
+def flow_view(text, marks):
+    """`text` with inline references neutralised, for finding paragraph breaks.
+
+    A \x0e that has an entry in the attachment table is a footnote reference
+    in the middle of a sentence, not a break -- splitting there cut every
+    footnoted paragraph in two and left the second half without its style
+    (Pages 14.5 and 15.4 documents). Same length, so every offset still
+    lines up; only the break test changes. Reader and editor both split on
+    this view, so they cannot disagree about where a paragraph begins.
+    """
+    if not marks:
+        return text
+    chars = list(text)
+    for i in marks:
+        chars[i] = "\ufffc"
+    return "".join(chars)
 
 
 def _clean(s, keep_breaks=True):

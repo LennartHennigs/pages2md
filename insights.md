@@ -101,6 +101,15 @@ The text uses `\n` for paragraph breaks, but Pages also emits `\x04` (page break
 on `\n` alone leaves paragraph starts a few characters short of their style entries, so
 headings silently resolve to body text. Split on `[\n\x04\x05\x0e]`.
 
+**Except `\x0e` is not always a break.** In documents with footnotes, a footnote's
+reference is a `\x0e` in the middle of a sentence, with an entry at its offset in the
+attachment table (field 16) pointing at the footnote's storage. Treating it as a section
+break cut every footnoted paragraph in two -- the sentence broke around the note and the
+second half lost its paragraph style. Seen in Pages 14.5 and 15.4 files. A `\x0e`
+*without* an attachment entry is still treated as a break (nothing has shown what else it
+could be). Both tools find paragraph boundaries on `flow_view`, the text with those
+references neutralised, so they cannot disagree.
+
 Also present: `U+2028` (line separator) inside headings that wrap across two lines in the
 original layout, and `U+FFFC` (object replacement character) as an inline object
 placeholder.
