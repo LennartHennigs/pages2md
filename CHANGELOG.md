@@ -118,6 +118,20 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- `revert HEAD~1` restored the wrong version when the document had been edited outside
+  `pages_edit` since the last snapshot: the safety snapshot taken first shifted what
+  `HEAD~1` meant. The ref is resolved before it, and an unknown ref changes nothing.
+- A comment thread whose `next` chain loops back on itself hung `pages2md --comments`
+  and `comment reply`; the chain is now followed once.
+- A zero-width regex match at the very end of the text (`$`) in a document with tracked
+  deletions mapped to the accepted length instead of the end of the raw text.
+- `comment add` over a manual line break said "replacing it would delete that character".
+- `insert --style Body` failed on a document whose style is `Body 1`: style names now
+  match case-insensitively, and without the number when only one style fits.
+- `--where` is no longer accepted by `retag`, `insert`, `import`, `format` and
+  `delete-paragraph`, where it was silently ignored.
+- The `--replace-section` refusal pointed at `tools/insights.md`; it is `insights.md`.
+
 - Deleting a paragraph let character styles and tracked changes that began earlier run on
   into the following text, and dropped the next paragraph's list style. The run in force
   after the deleted span is now carried back to its start. Deleting the empty slot before

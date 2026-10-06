@@ -764,7 +764,8 @@ class Document:
     def thread_ids(self, head):
         """Every comment archive in one thread, head first."""
         out, ident = [], head
-        while ident and self.by_id.get(ident, (None, None, None))[2] == T_COMMENT:
+        while (ident and ident not in out
+               and self.by_id.get(ident, (None, None, None))[2] == T_COMMENT):
             out.append(ident)
             c = parse_fields_of(self.arcs[self.by_id[ident][0]][1]
                                 [self.by_id[ident][1]][1])
@@ -1530,7 +1531,7 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
         if keep is None:
             rs, re_ = s, e
         elif e == s:                       # zero-width: an insertion point
-            rs = re_ = keep[s] if s < len(keep) else len(hay)
+            rs = re_ = keep[s] if s < len(keep) else len(doc.text()[0])
         else:
             rs, re_ = keep[s], keep[e - 1] + 1
         if scope:
@@ -1545,7 +1546,7 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
     return out
 
 
-def check_edits(doc, selected, replacement, regex, label=None):
+def check_edits(doc, selected, replacement, regex, label=None, anchor_only=False):
     """Turn selected matches into edits, refusing the unsafe ones."""
     tag = f"{label}: " if label else ""
     raw = doc.text()[0]
@@ -1563,9 +1564,11 @@ def check_edits(doc, selected, replacement, regex, label=None):
             sys.exit(f"{tag}match at accepted offset {acc} spans a tracked "
                      "deletion; resolve that edit in Pages first, or use --raw")
         if any(c in raw[rs:re_] for c in BREAKS):
+            what = ("this tool does not anchor a comment across one"
+                    if anchor_only else "replacing it would delete that character")
             sys.exit(f"{tag}match at offset {rs} contains a page break, object "
-                     "anchor or manual line break; replacing it would delete "
-                     "that character. Narrow the match to one side of it.")
+                     f"anchor or manual line break; {what}. Narrow the match to "
+                     "one side of it.")
         edits.append((rs, re_, new, old))
     return edits
 
@@ -1630,7 +1633,7 @@ def handles_for(doc, where):
 
 
 def resolve(doc, pattern, replacement, which, use_raw, regex, scope=None,
-            label=None, where="all"):
+            label=None, where="all", anchor_only=False):
     """Locate matches across storages and map them onto raw offsets.
 
     -> [(handle, [(raw_start, raw_end, new, old), ...]), ...]
@@ -1661,7 +1664,7 @@ def resolve(doc, pattern, replacement, which, use_raw, regex, scope=None,
     out = []
     for handle, ms in grouped.items():
         doc.select(handle)
-        out.append((handle, check_edits(doc, ms, replacement, regex, label)))
+        out.append((handle, check_edits(doc, ms, replacement, regex, label, anchor_only)))
     doc.select("body")
     return out
 
@@ -1974,7 +1977,7 @@ def finish_struct(doc, args, summary):
 def cmd_comment_add(args):
     doc = comment_preamble(args)
     groups = resolve(doc, args.on, None, 1, False, False,
-                     wanted_scope(args, doc), where=args.where)
+                     wanted_scope(args, doc), where=args.where, anchor_only=True)
     (handle, eds), = groups
     start, end, _new, old = eds[0]
     if handle != "body":
@@ -2051,10 +2054,26 @@ def one_match(doc, args, needle):
 
 def resolve_style(args):
     styles = style_ids(args.file)
-    if args.style not in styles:
+    key = find_style(styles, args.style)
+    if key is None:
         sys.exit(f"unknown style {args.style!r}; this document has: "
                  + ", ".join(sorted(styles)))
-    return styles[args.style]
+    return styles[key]
+
+
+def find_style(styles, name):
+    """The style key `name` means: exact, else case-insensitive, else the one
+    style whose name is `name` plus a number (`Body` -> `Body 1`). None if
+    nothing or more than one fits."""
+    if name in styles:
+        return name
+    low = name.casefold()
+    for tiers in (lambda k: k.casefold() == low,
+                  lambda k: re.fullmatch(re.escape(low) + r" \d+", k.casefold())):
+        hits = [k for k in styles if tiers(k)]
+        if len(hits) == 1:
+            return hits[0]
+    return None
 
 
 def cmd_retag(args):
@@ -2169,7 +2188,7 @@ def cmd_import(args):
             "a single write corrupt the document -- Pages opens and saves it, "
             "but every heading in the whole document loses its style. The "
             "cause is not yet found. Refusing rather than risk it; see "
-            "tools/insights.md.")
+            "insights.md.")
 
     if args.write:
         if args.replace_section:
@@ -2256,8 +2275,15 @@ def cmd_revert(args):
         sys.exit(f"Pages has {os.path.basename(args.file)} open — it would "
                  "overwrite the restored version on its next save. Close it "
                  "first.")
+    # Resolve the ref first: the safety snapshot below is a new commit and would
+    # shift what `HEAD~1` means.
+    rev = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "--quiet",
+                          f"{args.ref}^{{commit}}"], capture_output=True, text=True)
+    if rev.returncode:
+        sys.exit(f"unknown version {args.ref!r}; see `history` for the commits")
+    ref = rev.stdout.strip()
     vcs_snapshot(args.file, "Before revert to " + args.ref)
-    blob = subprocess.run(["git", "-C", root, "show", f"{args.ref}:{name}"],
+    blob = subprocess.run(["git", "-C", root, "show", f"{ref}:{name}"],
                           capture_output=True)
     if blob.returncode:
         sys.exit(f"cannot read {name} at {args.ref}: "
@@ -2413,7 +2439,6 @@ def main(argv=None):
         sp.add_argument("file")
         sp.add_argument("--in", dest="in_section", metavar="HEADING")
         sp.add_argument("--page", metavar="N[-M]")
-        sp.add_argument("--where", default="all")
         sp.add_argument("--expect", metavar="FINGERPRINT")
         sp.add_argument("--write", action="store_true")
         sp.add_argument("--no-backup", action="store_true")

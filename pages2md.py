@@ -216,8 +216,9 @@ class PagesDoc:
 
     def _thread(self, ident):
         """One comment and its replies, following the `next` chain."""
-        out = []
-        while ident and self.arcs.get(ident, (None,))[0] == T_COMMENT:
+        out, seen = [], set()
+        while ident and ident not in seen and self.arcs.get(ident, (None,))[0] == T_COMMENT:
+            seen.add(ident)                # a damaged chain may loop back on itself
             c = parse_fields(self.arcs[ident][1])
             when = None
             if C_DATE in c:

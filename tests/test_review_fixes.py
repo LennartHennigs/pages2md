@@ -179,6 +179,23 @@ class RevertIsAtomic(WithTmp):
         self.revert()
         self.assertEqual(self.read(), self.v1)
 
+    def test_a_relative_ref_means_what_it_meant_before_the_safety_snapshot(self):
+        """`revert` snapshots an externally edited file first; that commit must not shift HEAD~1."""
+        doc = E.Document(self.path)
+        doc.apply([(0, 3, "XYZ")])
+        doc.save(self.path)                       # edited outside pages_edit: not in history
+        self.revert()
+        self.assertEqual(self.read(), self.v1)
+
+    def test_an_unknown_ref_changes_nothing_and_adds_no_snapshot(self):
+        root = E.vcs_root(self.path)
+        before = E.git(root, "rev-list", "--count", "HEAD").stdout
+        with mock.patch.object(E, "pages_has_open", return_value=False), \
+                redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            E.cmd_revert(Namespace(file=self.path, ref="nope"))
+        self.assertEqual(self.read(), self.v2)
+        self.assertEqual(E.git(root, "rev-list", "--count", "HEAD").stdout, before)
+
     def test_failure_while_writing_leaves_the_document_alone(self):
         with mock.patch("os.replace", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):

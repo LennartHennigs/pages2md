@@ -489,8 +489,9 @@ pages_edit.py insert --after "Advanced Usage" --text "…" --style "Body" --writ
 pages_edit.py delete-paragraph --on "This paragraph is outdated" --write report.pages
 ```
 
-`--style` takes the English style name; the document's own list is printed if you name
-one it does not have (`Body`, `Heading 1`–`4`, `Title`, `Subtitle`, `Caption`, …).
+`--style` takes the English style name (`Body 1`, `Heading 1`–`4`, `Title`, `Subtitle`, …).
+Case does not matter, and a name without its number (`Body`) works when only one style
+fits. The document's own list is printed if you name one it does not have.
 
 Paragraph styles are run-length, and most paragraphs carry a "no change" entry that
 inherits from the one before. So every structural edit also re-states the following
