@@ -33,6 +33,11 @@ def parse_fields(buf):
     return out
 
 
+def storage_text(f):
+    """The text of one storage (fields as parse_fields returns them), as a str."""
+    return b"".join(f.get(F_TEXT, [])).decode("utf-8", "replace")
+
+
 def archives(payload):
     """Yield (archive_id, msg_type, msg_bytes), flattened for reading."""
     for info, msgs in _framed_archives(payload):
@@ -63,8 +68,9 @@ F_PROPS = 11                                  # style properties
 # Character-style properties. 11 and 12 are the ones Pages' own "Underline" and
 # "Strikethrough" styles set (checked against its built-in styles and a
 # rendered preview); 10 is only ever set on a footnote reference.
-P_BOLD, P_ITALIC, P_FONT, P_BASELINE, P_UNDERLINE, P_STRIKE = 1, 2, 5, 10, 11, 12
+P_BOLD, P_ITALIC, P_FONT, P_UNDERLINE, P_STRIKE = 1, 2, 5, 11, 12
 F_LEVELS = 6                  # list level, run-length: entry {index, level, 0}
+F_LIST_LABEL = 11             # list style: label type of level 1 (0 none, 1 image, 2 bullet, 3 numbered)
 
 CONTROL = {"\x04": "", "\x05": "", "\x0e": "", "￼": ""}
 LINE_SEP = " "
@@ -136,6 +142,7 @@ class PagesDoc:
                     self.arcs[i] = (t, m, n)
         self._style = {}
         self._fmt = {}
+        self._kind = {}
 
     # -- styles ------------------------------------------------------------
     def style(self, ref, depth=0):
@@ -277,7 +284,7 @@ class PagesDoc:
         them by character index in field 23, run-length, closed by the next
         entry. Same comment archives either way.
         """
-        raw = u16(b"".join(f.get(F_TEXT, [])).decode("utf-8", "replace"))
+        raw = u16(storage_text(f))
         if F_COMMENTS_RUN in f:
             return self._comment_runs(f, handle, anchor, raw)
         if F_COMMENTS not in f:
@@ -339,8 +346,7 @@ class PagesDoc:
         text = self._raw_text()
         return next((i for i, (t, msg, _s) in self.arcs.items()
                      if t == T_STORAGE
-                     and b"".join(parse_fields(msg).get(F_TEXT, []))
-                     .decode("utf-8", "replace") == text), None)
+                     and storage_text(parse_fields(msg)) == text), None)
 
     def storages(self):
         """[(handle, storage id, anchor or None, kind)] -- every text storage.
@@ -360,7 +366,7 @@ class PagesDoc:
         for ident, (mtype, msg, _src) in self.arcs.items():
             if mtype != T_STORAGE or ident in seen:
                 continue
-            txt = b"".join(parse_fields(msg).get(F_TEXT, [])).decode("utf-8", "replace")
+            txt = storage_text(parse_fields(msg))
             if _clean(txt, False):
                 rest.append((ident, "toc" if ident in toc else "other"))
         counts = {}
@@ -389,11 +395,15 @@ class PagesDoc:
         """ObjectAttributeTable -> sorted [(char_index, ref|None)]."""
         if field not in f:
             return []
-        out = []
-        for e in parse_fields(f[field][0]).get(1, []):
-            ef = parse_fields(e)
-            out.append((ef.get(1, [0])[0], _ref(ef[2][0]) if 2 in ef else None))
-        return sorted(out)
+        return sorted((i, _ref(ef[2][0]) if 2 in ef else None)
+                      for i, ef in PagesDoc._entries(f, field))
+
+    @staticmethod
+    def _entries(f, field):
+        """[(char index, {field: [values]})] of an index-keyed table, unsorted."""
+        return [(ef.get(1, [0])[0], ef)
+                for ef in map(parse_fields, parse_fields(f[field][0]).get(1, []))
+                ] if field in f else []
 
     def list_kind(self, ref):
         """"bullet", "numbered" or None for a list-style archive.
@@ -402,11 +412,11 @@ class PagesDoc:
         2 bullet text, 3 numbered), not from its name: "Lettered", "Harvard"
         and "Numbered" are all numbered, and names are what a user renames.
         """
-        m = self.arcs.get(ref, (None, None))[1] if ref is not None else None
-        if not m:
-            return None
-        code = parse_fields(m).get(11, [0])[0]
-        return {0: None, 3: "numbered"}.get(code, "bullet")
+        if ref not in self._kind:
+            m = self.arcs.get(ref, (None, None))[1] if ref is not None else None
+            code = parse_fields(m).get(F_LIST_LABEL, [0])[0] if m else 0
+            self._kind[ref] = {0: None, 3: "numbered"}.get(code, "bullet")
+        return self._kind[ref]
 
     def _levels(self, f):
         """[(offset, level)] from the list-level table (sorted, run-length).
@@ -415,24 +425,12 @@ class PagesDoc:
         0, "Is" and "A bulleted" are level 1 (one entry covers both) and
         "list" is level 2.
         """
-        if F_LEVELS not in f:
-            return []
-        out = []
-        for e in parse_fields(f[F_LEVELS][0]).get(1, []):
-            ef = parse_fields(e)
-            out.append((ef.get(1, [0])[0], ef.get(2, [0])[0]))
-        return sorted(out)
+        return sorted((i, ef.get(2, [0])[0]) for i, ef in self._entries(f, F_LEVELS))
 
     def _list_starts(self, f):
         """Paragraph offsets where a list restarts (para-starts `first` is 1)."""
-        if F_PARA_STARTS not in f:
-            return set()
-        out = set()
-        for e in parse_fields(f[F_PARA_STARTS][0]).get(1, []):
-            ef = parse_fields(e)
-            if ef.get(2, [0])[0] == 1:
-                out.add(ef.get(1, [0])[0])
-        return out
+        return {i for i, ef in self._entries(f, F_PARA_STARTS)
+                if ef.get(2, [0])[0] == 1}
 
     def _links(self, f, text):
         """[(start, end, url)] for the hyperlinks of one storage.
@@ -454,10 +452,8 @@ class PagesDoc:
         return out
 
     def inline_marks(self, f, text):
-        """Offsets of footnote references: \\x0e with an attachment entry."""
-        return {i for i, ref in self._table(f, F_ATTACHMENTS)
-                if ref is not None and text[i:i + 1] == FOOTNOTE_MARK}
-
+        """Offsets of footnote references in one storage (see footnote_marks)."""
+        return footnote_marks(self._table(f, F_ATTACHMENTS), text)
     def _styles(self, f, field):
         """Style table, keeping only entries that actually set a style."""
         return [(i, r) for i, r in self._table(f, field) if r is not None]
@@ -480,7 +476,7 @@ class PagesDoc:
         return out
 
     def _raw_text(self):
-        return b"".join(self._body().get(F_TEXT, [])).decode("utf-8", "replace")
+        return storage_text(self._body())
 
     def _dropped(self, f, changes):
         """Character indices a tracked-change mode leaves out of the text."""
@@ -523,8 +519,10 @@ class PagesDoc:
         marks = self._ranges(f, F_DELETIONS) if changes == "mark" else []
         m_idx = [a for a, _ in marks]
         m_ends = sorted(b for _a, b in marks)
-        refs_here = self.inline_marks(f, text)
-        links_all = self._links(f, text)
+        ref_marks = self.inline_marks(f, text)
+        sorted_refs = sorted(ref_marks)
+        links_all = self._links(f, text)      # sorted, and never overlapping
+        link_ends = [b for _a, b, _u in links_all]
         list_starts = self._list_starts(f)
         levels = self._levels(f)
         lv_idx = [i for i, _ in levels]
@@ -535,7 +533,7 @@ class PagesDoc:
             k = bisect.bisect_right(idx, i) - 1
             return tbl[k][1] if k >= 0 else None
 
-        flow = flow_view(text, self.inline_marks(f, text))
+        flow = flow_view(text, ref_marks)
         out, pos = [], 0
         for chunk in PARA_SPLIT.split(flow):
             raw = text[pos:pos + len(chunk)]
@@ -543,8 +541,8 @@ class PagesDoc:
             name, semantic = self.style(lookup(para_tbl, p_idx, pos))
             lref = lookup(list_tbl, l_idx, pos)
             bullet = self.style(lref)[1]
-            kind = self.list_kind(lref) if (bullet or "").split(
-                "liststyle-")[-1] != "None" else None
+            lname = (bullet or "").split("liststyle-")[-1]
+            kind = self.list_kind(lref) if lname != "None" else None
             runs = []
             k = max(bisect.bisect_right(c_idx, pos) - 1, 0)
             while k < len(char_tbl) and char_tbl[k][0] < pos + len(raw):
@@ -556,8 +554,12 @@ class PagesDoc:
                     runs.append((start - pos, min(end, pos + len(raw)) - pos,
                                  b, i_, u, x))
                 k += 1
-            links = [(max(a, pos) - pos, min(b, pos + len(raw)) - pos, url)
-                     for a, b, url in links_all if b > pos and a < pos + len(raw)]
+            links = []
+            for j in range(bisect.bisect_right(link_ends, pos), len(links_all)):
+                a, b, url = links_all[j]
+                if a >= pos + len(raw):
+                    break
+                links.append((max(a, pos) - pos, min(b, pos + len(raw)) - pos, url))
             if drop:
                 keep = [k for k in range(len(raw)) if pos + k not in drop]
                 remap = {}
@@ -565,20 +567,18 @@ class PagesDoc:
                     remap[old] = new
                 remap[len(raw)] = len(keep)
                 raw = "".join(raw[k] for k in keep)
-                shifted = []
-                for s, e, *flags in runs:
-                    ns = remap.get(s, bisect.bisect_left(keep, s))
-                    ne = remap.get(e, bisect.bisect_left(keep, e))
-                    if ne > ns:
-                        shifted.append((ns, ne, *flags))
-                runs = shifted
-                moved = []
-                for s, e, url in links:
-                    ns = remap.get(s, bisect.bisect_left(keep, s))
-                    ne = remap.get(e, bisect.bisect_left(keep, e))
-                    if ne > ns:
-                        moved.append((ns, ne, url))
-                links = moved
+
+                def squeeze(spans):
+                    """Move (start, end, ...) spans onto the shrunken text."""
+                    out = []
+                    for s, e, *rest in spans:
+                        ns = remap.get(s, bisect.bisect_left(keep, s))
+                        ne = remap.get(e, bisect.bisect_left(keep, e))
+                        if ne > ns:
+                            out.append((ns, ne, *rest))
+                    return out
+
+                runs, links = squeeze(runs), squeeze(links)
             struck = []
             if marks:
                 # bisect the span *ends* so a long span starting far back is
@@ -596,15 +596,14 @@ class PagesDoc:
                 struck = [(m[a], m[b]) for a, b in struck]
                 links = [(m[a], m[b], url) for a, b, url in links]
                 raw = show(raw)
-            refs = [m for m in sorted(refs_here)
-                    if pos <= m < pos + width and m not in drop]
+            refs = [m for m in sorted_refs[bisect.bisect_left(sorted_refs, pos):
+                                           bisect.bisect_left(sorted_refs, pos + width)]
+                    if m not in drop]
             out.append(dict(offset=pos, raw=raw, style=name, struck=struck,
                             refs=refs, links=links, list_kind=kind,
-                            list_level=(levels[bisect.bisect_right(lv_idx, pos) - 1][1]
-                                        if kind and levels
-                                        and bisect.bisect_right(lv_idx, pos) else 0),
+                            list_level=(lookup(levels, lv_idx, pos) or 0) if kind else 0,
                             list_start=pos in list_starts,
-                            list=(bullet or "").split("liststyle-")[-1] or None,
+                            list=lname or None,
                             semantic=(semantic or "").split("paragraphstyle-")[-1],
                             runs=runs))
             pos += width + 1
@@ -694,8 +693,7 @@ def text_fingerprint(path):
     texts = [doc._raw_text()]
     for _handle, sid, _anchor, kind in doc.storages()[1:]:
         if kind != "toc" and sid is not None:
-            texts.append(b"".join(doc.storage(sid).get(F_TEXT, []))
-                         .decode("utf-8", "replace"))
+            texts.append(storage_text(doc.storage(sid)))
     return fingerprint_parts(texts)
 
 
@@ -955,6 +953,16 @@ PARA_SPLIT = re.compile(f"[{re.escape(PARA_BREAKS)}]")
 FOOTNOTE_MARK = "\x0e"
 
 
+def footnote_marks(rows, text):
+    """Offsets of footnote references: a \\x0e with an entry in the attachment table.
+
+    `rows` is that table as [(char index, ref or None)]; the reader and the
+    editor each decode it their own way and share this rule.
+    """
+    return {i for i, ref in rows
+            if ref is not None and text[i:i + 1] == FOOTNOTE_MARK}
+
+
 def flow_view(text, marks):
     """`text` with inline references neutralised, for finding paragraph breaks.
 
@@ -967,10 +975,11 @@ def flow_view(text, marks):
     """
     if not marks:
         return text
-    chars = list(text)
-    for i in marks:
-        chars[i] = "\ufffc"
-    return "".join(chars)
+    out, prev = [], 0
+    for i in sorted(marks):
+        out += [text[prev:i], "\ufffc"]
+        prev = i + 1
+    return "".join(out) + text[prev:]
 
 
 def _clean(s, keep_breaks=True):
@@ -1105,13 +1114,12 @@ def _annotate(raw, runs, struck=(), links=(), escape=False):
         marks += [(i, 2, 3, "\\") for i in _escape_positions(raw)]
     marks.sort(key=lambda m: (m[0], m[1], -m[2] if m[1] == 0 else m[2]),
                reverse=True)
+    pieces, end = [], len(raw)          # build the result right to left
     for pos, _rank, _depth, text in marks:
-        raw = raw[:pos] + text + raw[pos:]
-    return raw
-
-
-def _emphasize(raw, runs):
-    return _annotate(raw, runs)
+        pieces += [raw[pos:end], text]
+        end = pos
+    pieces.append(raw[:end])
+    return "".join(reversed(pieces))
 
 
 def _place_refs(text, numbers):
@@ -1146,8 +1154,7 @@ def render_markdown(doc, paras):
         if not body:
             continue
         level = HEADING.get(p["semantic"])
-        kind = (p["list_kind"] if "list_kind" in p else
-                None if p.get("list") in (None, "None") else "bullet")
+        kind = p["list_kind"]
         if p.get("footnote"):
             # definitions go at the end; a note's later paragraphs are indented
             # (a manual line break inside a note becomes a hard break)
@@ -1161,10 +1168,9 @@ def render_markdown(doc, paras):
             # a child can sit at most one level below the item before it
             depth = min(p.get("list_level", 0), len(widths))
             del widths[depth:]
-            for k in [k for k in counters if k > depth]:
-                del counters[k]
-            for k in [k for k in kinds if k > depth]:
-                del kinds[k]
+            for state in (counters, kinds):
+                for k in [k for k in state if k > depth]:
+                    del state[k]
             if kind == "numbered":
                 again = (kinds.get(depth) == "numbered" and depth in counters
                          and not p.get("list_start"))
@@ -1260,8 +1266,7 @@ def render_storages(doc, paras):
     """Every text storage in the document, with its handle."""
     out = [f"{'handle':<8} {'id':>10}  {'anchor':>7}  text"]
     for handle, sid, anchor, _kind in doc.storages():
-        txt = " ".join(_clean(b"".join(doc.storage(sid).get(F_TEXT, []))
-                              .decode("utf-8", "replace"), False).split())
+        txt = " ".join(_clean(storage_text(doc.storage(sid)), False).split())
         where = f"@{anchor}" if anchor is not None else "-"
         out.append(f"{handle:<8} {sid:>10}  {where:>7}  "
                    f"{txt[:60]}{'…' if len(txt) > 60 else ''}")

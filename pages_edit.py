@@ -47,12 +47,17 @@ def char_value_at(val, index):
     Unlike the paragraph table, a null entry here is meaningful -- it means
     "no override from here" -- so it must be carried, not skipped.
     """
+    row = row_at(val, index)
+    return row[1] if row else None
+
+
+def row_at(val, index):
+    """(char index, ref or None, raw entry) of the entry in force at `index`."""
     best = None
-    for idx, ref, _sub in entry_rows(val):
-        if idx <= index:
-            best = ref
-        else:
+    for row in entry_rows(val):
+        if row[0] > index:
             break
+        best = row
     return best
 
 
@@ -275,12 +280,17 @@ def states_own_style(val, index):
     return any(i == index and ref is not None for i, ref, _s in entry_rows(val))
 
 
-def set_style_at(val, index, style_id):
-    """Force the paragraph-style entry at `index` to `style_id`."""
+def set_entry_at(val, index, entry):
+    """Replace (or add) the raw table entry at `index`, keeping the table sorted."""
     rows = [(i, sub) for i, _r, sub in entry_rows(val) if i != index]
-    rows.append((index, entry_bytes(index, style_id)))
+    rows.append((index, entry))
     rows.sort(key=lambda r: r[0])
     return emit([(1, 2, sub) for _i, sub in rows])
+
+
+def set_style_at(val, index, style_id):
+    """Force the paragraph-style entry at `index` to `style_id`."""
+    return set_entry_at(val, index, entry_bytes(index, style_id))
 
 
 def has_entry_at(val, index):
@@ -307,12 +317,8 @@ def payload_at(val, index):
     For run-length tables whose values are plain numbers, not references --
     the list-level table -- where char_value_at has no ref to return.
     """
-    best = None
-    for idx, _ref, sub in entry_rows(val):
-        if idx > index:
-            break
-        best = emit([t for t in tokenize(sub) if t[0] != 1])
-    return best
+    row = row_at(val, index)
+    return emit([t for t in tokenize(row[2]) if t[0] != 1]) if row else None
 
 
 def carry_payload(val, at, payload, bound):
@@ -320,10 +326,7 @@ def carry_payload(val, at, payload, bound):
     if (payload is None or at >= bound or has_entry_at(val, at)
             or payload_at(val, at) == payload):
         return val
-    rows = [(i, sub) for i, _r, sub in entry_rows(val)]
-    rows.append((at, emit([(1, 0, write_varint(at))]) + payload))
-    rows.sort(key=lambda r: r[0])
-    return emit([(1, 2, sub) for _i, sub in rows])
+    return set_entry_at(val, at, emit([(1, 0, write_varint(at))]) + payload)
 
 
 def isolate_insertion(val, at, length, bound):
@@ -560,6 +563,7 @@ class Document:
         # body's maximum, and reusing one produces a duplicate-id document.
         # `reader.arcs` already spans every .iwa file's archives, keyed by id.
         self.next_id = 1 + max(reader.arcs, default=0)
+        self._flow_cache = None             # (message bytes, flow view)
 
     def _find_body(self):
         """(archive index, message index) of the largest text storage."""
@@ -838,15 +842,13 @@ class Document:
                          "to reuse; apply it once in Pages and try again")
         val = parse_fields_of(self._msg).get(F_CHAR_TBL, [None])[0]
         after = char_value_at(val, end)             # read before changing
-        kept = [(i, sub) for i, _r, sub in entry_rows(val)
-                if not start <= i <= end]
-        kept.append((start, entry_bytes(start, want)))
+        new_table = val is None
+        val = set_style_at(drop_entries_in(val, start, end + 1), start, want)
         if end < len(self.text()[0]):
-            kept.append((end, entry_bytes(end, after)))
-        if val is None and start > 0:
-            kept.append((0, entry_bytes(0)))       # a new table starts at 0
-        kept.sort(key=lambda r: r[0])
-        self._put_field(F_CHAR_TBL, emit([(1, 2, sub) for _i, sub in kept]))
+            val = set_style_at(val, end, after)
+        if new_table and start > 0:
+            val = set_style_at(val, 0, None)        # a new table starts at 0
+        self._put_field(F_CHAR_TBL, val)
         return 1
 
     def _put_field(self, field, value):
@@ -886,7 +888,7 @@ class Document:
         """
         self._require_single_chunk()
         raw = self.text()[0]
-        start, _end = self.paragraph_bounds(offset)
+        start, _end = self.paragraph_bounds(offset, raw)
         after = min(_end + 1, len(raw))
         rebuilt = []
         for num, wire, val in tokenize(self._msg):
@@ -902,21 +904,27 @@ class Document:
         self._msg = emit(rebuilt)
         return start
 
-    def flow(self):
+    def flow(self, raw=None):
         """The selected storage's text with footnote references neutralised.
 
         Paragraph boundaries are found on this view (see pages2md.flow_view);
-        the real text is still what gets edited.
+        the real text is still what gets edited. Kept until the storage's
+        message changes, which every edit does (callers that already hold the
+        text can pass it as `raw` and skip decoding it again).
         """
-        raw = self.text()[0]
-        val = parse_fields_of(self._msg).get(F_ATTACHMENTS, [None])[0]
-        return flow_view(raw, {i for i, ref, _s in entry_rows(val)
-                               if ref is not None
-                               and raw[i:i + 1] == FOOTNOTE_MARK})
+        msg = self._msg
+        if self._flow_cache and self._flow_cache[0] is msg:
+            return self._flow_cache[1]
+        raw = self.text()[0] if raw is None else raw
+        val = parse_fields_of(msg).get(F_ATTACHMENTS, [None])[0]
+        rows = [(i, ref) for i, ref, _s in entry_rows(val)]
+        flow = flow_view(raw, footnote_marks(rows, raw))
+        self._flow_cache = (msg, flow)
+        return flow
 
-    def paragraph_bounds(self, offset):
+    def paragraph_bounds(self, offset, raw=None):
         """(start, end) of the paragraph containing `offset`."""
-        return para_bounds(self.flow(), offset)
+        return para_bounds(self.flow(raw), offset)
 
     def paragraph_starts(self, lo, hi):
         """Offsets of every paragraph beginning inside [lo, hi)."""
@@ -980,7 +988,7 @@ class Document:
         """Remove the paragraph containing `offset`, newline included."""
         self._require_single_chunk()
         raw = self.text()[0]
-        start, end = self.paragraph_bounds(offset)
+        start, end = self.paragraph_bounds(offset, raw)
         if raw[end:end + 1] == PARA_END:    # its own terminator, not the
             end += 1                        # next paragraph's leading break
         if end == start:
@@ -998,10 +1006,11 @@ class Document:
                 # much as its paragraph style
                 styled = num in (F_PARA_TBL, F_LIST_TBL)
                 keep = effective_style_at(val, end) if styled else None
-                run = num in RUN_TABLES and table_kind(val) == "index"
+                indexed = table_kind(val) == "index"
+                run = indexed and num in RUN_TABLES
                 carry = char_value_at(val, end) if run else None
                 # list levels are run-length too, holding numbers not refs
-                leveled = num == F_LEVELS and table_kind(val) == "index"
+                leveled = indexed and num == F_LEVELS
                 carry_level = payload_at(val, end) if leveled else None
                 val = drop_entries_in(val, start, end)
                 val, _n = shift_table(val, start, end, delta)
@@ -1210,7 +1219,7 @@ from pages2md import (outline, section_range, index_path, load_index,
                       F_TEXT, F_PARA_TBL, F_LIST_TBL, F_COMMENTS,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS_RUN,
                       C_TEXT, C_DATE, C_AUTHOR, C_NEXT, APPLE_EPOCH,
-                      PARA_BREAKS, PARA_SPLIT, F_ATTACHMENTS, FOOTNOTE_MARK,
+                      PARA_BREAKS, PARA_SPLIT, F_ATTACHMENTS, footnote_marks,
                       F_LEVELS,
                       flow_view,
                       # text is handled as a UTF-16 view; see pages2md
@@ -1431,9 +1440,9 @@ def check_edits(doc, selected, replacement, regex, label=None):
     tag = f"{label}: " if label else ""
     raw = doc.text()[0]
     edits = []
+    if replacement is not None:
+        replacement = u16(replacement)
     for rs, re_, acc, span, old, h in selected:
-        if replacement is not None:
-            replacement = u16(replacement)
         new = (h.expand(replacement) if regex and replacement is not None
                else replacement)
         if splits_pair(raw, rs) or splits_pair(raw, re_):

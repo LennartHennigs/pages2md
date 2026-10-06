@@ -10,7 +10,8 @@ import os, struct, sys, zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from iwa_codec import emit, write_varint, pack_archives, iwa_encode, read_varint
 import pages_edit as E
-from pages2md import (T_STORAGE, T_ATTACHMENT, T_CHAR_STYLE, T_LIST_STYLE, P_BOLD, P_ITALIC, F_PROPS,
+from pages2md import (T_STORAGE, T_ATTACHMENT, T_CHAR_STYLE, T_LIST_STYLE,
+                      P_BOLD, P_ITALIC, P_UNDERLINE, P_STRIKE, F_PROPS, F_LIST_LABEL,
                       F_TEXT, F_PARA_TBL, F_LIST_TBL, F_CHAR_TBL,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS, F_ATTACHMENTS)
 
@@ -47,16 +48,20 @@ def char_style(bold=False, italic=False, underline=False, strike=False):
     """A character-style archive with the given flags set (and nothing else)."""
     props = []
     for on, field in ((bold, P_BOLD), (italic, P_ITALIC),
-                      (underline, 11), (strike, 12)):
+                      (underline, P_UNDERLINE), (strike, P_STRIKE)):
         if on:
             props.append((field, 0, write_varint(1)))
     return emit([(F_PROPS, 2, emit(props))])
 
 
-def para_levels(rows):
-    """The list-level table (field 6) from [(index, level)]."""
-    return emit([(1, 2, emit([(1, 0, write_varint(i)), (2, 0, write_varint(lv)),
-                              (3, 0, write_varint(0))])) for i, lv in rows])
+def para_triples(rows):
+    """A table of {index, value, 0} entries from [(index, value)]: list levels
+    (field 6) hold the level, list restarts (field 14) the `first` flag."""
+    return emit([(1, 2, emit([(1, 0, write_varint(i)), (2, 0, write_varint(v)),
+                              (3, 0, write_varint(0))])) for i, v in rows])
+
+
+para_levels = para_starts = para_triples
 
 
 def list_style(kind, label):
@@ -67,19 +72,13 @@ def list_style(kind, label):
     names = emit([(1, 2, kind.encode()),
                   (2, 2, f"text-1-liststyle-{kind}".encode())])
     return emit([(1, 2, names), (10, 0, write_varint(6))]
-                + [(11, 0, write_varint(label))] * 9)
+                + [(F_LIST_LABEL, 0, write_varint(label))] * 9)
 
 
 def hyperlink(url):
     """A hyperlink smart-field archive (type 2032): a uuid and the URL."""
     return emit([(1, 2, b"\n$00000000-0000-0000-0000-000000000000"),
                  (2, 2, url.encode())])
-
-
-def para_starts(rows):
-    """The list-restart table (field 14) from [(index, first)]."""
-    return emit([(1, 2, emit([(1, 0, write_varint(i)), (2, 0, write_varint(f)),
-                              (3, 0, write_varint(0))])) for i, f in rows])
 
 
 def footnote(ref_id, storage_id, text, paragraphs=None):

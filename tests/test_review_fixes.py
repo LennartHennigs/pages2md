@@ -71,7 +71,7 @@ class FingerprintsAgree(WithTmp):
 class Emphasis(unittest.TestCase):
     def render(self, raw, runs, struck=()):
         para = dict(raw=raw, runs=runs, struck=list(struck), semantic="Body 1",
-                    list=None, sidenote=None, footnote=None, ref_nos=[],
+                    list=None, list_kind=None, sidenote=None, footnote=None, ref_nos=[],
                     offset=0, style="Body")
         return P.render_markdown(None, [para])
 

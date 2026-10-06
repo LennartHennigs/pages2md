@@ -82,6 +82,16 @@ Add each change here in the same commit that makes it.
   document.
 - JSON `runs` are `[start, end, bold, italic, underline, strikethrough]`; strikethrough is
   new. `char_format` returns four flags.
+- Large documents are faster to read and to edit, with identical output (measured on a
+  synthetic document of 1000 paragraphs, 250 footnotes and 1000 links): reading
+  paragraphs about 2.7× faster, rendering Markdown 2.4×, and finding a paragraph's
+  bounds in the editor about 400× (the footnote-aware paragraph view is computed once per
+  edit, not once per lookup). Links, footnote references and list kinds are no longer
+  rescanned for every paragraph.
+- The reader and editor now share one definition of a footnote reference
+  (`footnote_marks`), of a storage's text (`storage_text`) and of the entry in force at an
+  index (`row_at`); `format` uses the same table helpers as the other edits. Removed the
+  unused `_emphasize` and `P_BASELINE`.
 - Markdown lists are tight: consecutive items of one list have no blank line between them.
   Numbered items used to come out as `-`.
 - Markdown output escapes text that would turn into markup (`*`, `` ` ``, `[`, `]`, `\`,
