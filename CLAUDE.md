@@ -6,7 +6,8 @@ without breaking it.
 
 ## What this is
 
-Three Python files, standard library only (no `protobuf`, no `snappy`, no Pages):
+Three Python files, standard library only (no `protobuf`, no `snappy`, no Pages), on one
+Python version: 3.13, pinned in `.python-version` and run with `uv` (`uv run python ...`):
 
 | File | Role |
 | --- | --- |
@@ -22,12 +23,12 @@ disagree. Keep it that way.
 ## Commands
 
 ```bash
-python3 -m unittest discover -s tests          # everything, a few seconds
-python3 -m unittest tests.test_footnotes       # one module
+uv run python -m unittest discover -s tests          # everything, a few seconds
+uv run python -m unittest tests.test_footnotes       # one module
 python3 pages2md.py tests/samples/formatting.pages            # render a sample
 python3 pages_edit.py find "text" tests/samples/formatting.pages
-python3 tests/anonymize_author.py in.pages out.pages "Real Name" "Sample Author"
-python3 tests/pages_roundtrip.py all /tmp/rt   # macOS + Pages only: does Pages accept our writes?
+uv run python tests/anonymize_author.py in.pages out.pages "Real Name" "Sample Author"
+uv run python tests/pages_roundtrip.py all /tmp/rt   # macOS + Pages only: does Pages accept our writes?
 ```
 
 `osascript` does not exist off macOS. `pages_has_open` returns False there, and tests that

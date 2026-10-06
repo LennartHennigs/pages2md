@@ -9,8 +9,9 @@ round-trip. Two command-line tools and the lossless codec they share.
 | `pages_edit.py` | find and replace text, restructure paragraphs, import Markdown, write comments, keep a history |
 | `iwa_codec.py` | the lossless IWA/protobuf layer both are built on |
 
-**Requirements:** Python 3.8+ (written for it; the tests have only been run on 3.13).
-Nothing else — no `protobuf`, no `snappy`, no Pages running. See
+**Requirements:** Python 3.13, run with [uv](https://docs.astral.sh/uv/) — the version is
+pinned in `.python-version`, so `uv run pages2md.py doc.pages` is all it takes (the examples
+below leave `uv run` out). Nothing else — no `protobuf`, no `snappy`, no Pages running. See
 [`insights.md`](insights.md) for how the file format works and why these tools are built
 the way they are, [`CHANGELOG.md`](CHANGELOG.md) for what changed, and
 [`CLAUDE.md`](CLAUDE.md) if you are working on the code.
@@ -654,14 +655,14 @@ First, the unit tests (stdlib only, no Pages needed; `tests/PLAN.md` lists what 
 to write and `tests/samples/README.md` the real documents they run against):
 
 ```bash
-python3 -m unittest discover -s tests
+uv run python -m unittest discover -s tests
 ```
 
 Then, on a Mac with Pages, the round-trip harness, which is the check that settles whether
 Pages accepts what the editor writes (see `tests/pages_roundtrip.py`):
 
 ```bash
-python3 tests/pages_roundtrip.py all /tmp/roundtrip     # ~22 cases, a minute or two
+uv run python tests/pages_roundtrip.py all /tmp/roundtrip     # ~22 cases, a minute or two
 ```
 
 It copies the sample documents, applies each kind of write to a copy (replace, tracked

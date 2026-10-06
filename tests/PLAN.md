@@ -1,6 +1,6 @@
 # Test plan
 
-Run everything with `python3 -m unittest discover -s tests` (stdlib only, no Pages
+Run everything with `uv run python -m unittest discover -s tests` (stdlib only, no Pages
 needed). `fixture.py` builds minimal real `.pages` packages, so tests go through the
 same zip → IWA → archive → storage path as a real document.
 
@@ -38,7 +38,7 @@ and the assertion that fails on today's code. **F** = needs a small fixture exte
 
 ### Waiting for a real Pages
 
-Run `python3 tests/pages_roundtrip.py all DIR` on a Mac and read `report.md`. Until that
+Run `uv run python tests/pages_roundtrip.py all DIR` on a Mac and read `report.md`. Until that
 has been done, nothing the editor writes is known to be accepted by Pages. The first run
 also tests the harness: the AppleScript (`open`, `save ... in`, `close`) has only been
 exercised with a stand-in, and the controls may show normalisations by Pages that the

@@ -4,10 +4,10 @@
 The unit tests check what the tools read back from their own output. They cannot
 show that Pages opens a written file and keeps everything in it. This does:
 
-    python3 tests/pages_roundtrip.py all  OUTDIR     # prepare, run Pages, check, report
-    python3 tests/pages_roundtrip.py prepare OUTDIR  # only write the edited copies
-    python3 tests/pages_roundtrip.py run  OUTDIR     # drive Pages over a prepared pack
-    python3 tests/pages_roundtrip.py check OUTDIR    # compare, write OUTDIR/report.md
+    uv run python tests/pages_roundtrip.py all  OUTDIR     # prepare, run Pages, check, report
+    uv run python tests/pages_roundtrip.py prepare OUTDIR  # only write the edited copies
+    uv run python tests/pages_roundtrip.py run  OUTDIR     # drive Pages over a prepared pack
+    uv run python tests/pages_roundtrip.py check OUTDIR    # compare, write OUTDIR/report.md
 
 For each case it copies a real sample (tests/samples/), applies one write from
 pages_edit to the copy, has Pages open that copy and *save it as a new file* (so

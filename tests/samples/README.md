@@ -10,7 +10,7 @@ For every sample:
   (File ▸ Advanced ▸ File Format: Single File), not a package.
 - Copy the real local file, not an iCloud placeholder.
 - Use throwaway text only, because the file is committed. Comments carry your Pages
-  author name: run `python3 tests/anonymize_author.py in.pages out.pages "Your Name"
+  author name: run `uv run python tests/anonymize_author.py in.pages out.pages "Your Name"
   "Sample Author"` and check `pages2md.py --comments out.pages`. Look for your name in
   the text and in hyperlinks too; the tool does not touch those.
 - Write down your Pages version in the commit message.
@@ -26,7 +26,7 @@ each checked offset differs by 2 between the two conventions.
 3. Paragraph 3 (Body): `😀😀 a commented word.` Select the word `commented` and add a
    comment (Insert ▸ Comment) with any text.
 
-`python3 -m unittest tests.test_samples` then says whether each table counts code
+`uv run python -m unittest tests.test_samples` then says whether each table counts code
 points or UTF-16 units.
 
 ## `kitchen-sink.pages`

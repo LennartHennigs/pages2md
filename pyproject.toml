@@ -1,0 +1,11 @@
+[project]
+name = "pages2md"
+version = "0.0.0"
+description = "Read and edit Apple Pages documents directly, without Pages."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.13"
+dependencies = []                 # standard library only, on purpose
+
+[tool.uv]
+package = false                   # three scripts and a codec, not an installable package

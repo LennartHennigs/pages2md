@@ -4,7 +4,7 @@
 Comments carry the author's name (in AnnotationAuthorStorage.iwa). Run this on
 any document before it goes into tests/samples/:
 
-    python3 tests/anonymize_author.py in.pages out.pages "Real Name" "Sample Author"
+    uv run python tests/anonymize_author.py in.pages out.pages "Real Name" "Sample Author"
 
 The name is replaced inside the protobuf, with every enclosing length rewritten,
 so the file stays valid. It prints how many strings it replaced. Check the result

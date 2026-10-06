@@ -55,6 +55,8 @@ Add each change here in the same commit that makes it.
   Pages' page counts. Stages `prepare`, `run`, `check` and `all`, with a manual route for
   `run`; writes `report.md`. Tested with a stand-in for Pages; not yet run against the real
   application.
+- `pyproject.toml`, `.python-version` and `uv.lock`: one supported Python (3.13), run with
+  uv. The earlier "Python 3.8+" claim was never tested and is dropped.
 - This changelog.
 
 ### Changed
