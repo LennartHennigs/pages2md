@@ -197,6 +197,8 @@ def scan_index_entries(val):
             if ln == 0 or p + ln > n or val[p] != 0x08:
                 return None
             idx, q = read_varint(val, p + 1)
+            if q > p + ln:                       # the index runs past its own entry
+                return None
             out.append((idx, pos, q, p + ln))
             pos = p + ln
     except IndexError:
@@ -609,6 +611,20 @@ def spans_of(val):
     return out
 
 
+def refuse_overlap(val, start, end):
+    """Refuse an edit at [start, end) that touches the inside of an existing change span.
+
+    A pure insertion (start == end) overlaps when it falls strictly inside one.
+    """
+    for a, b, _r in spans_of(val):
+        if (a < end and start < b) if end > start else a < start < b:
+            sys.exit(
+                f"the text at {start}-{end} overlaps an existing tracked "
+                f"change ({a}-{b}); recording a change across another would "
+                "silently re-attribute or un-mark part of it. Resolve that "
+                "change in Pages first, or edit with --no-track.")
+
+
 def put_span(val, start, end, archive_id):
     """Add a change span, rebuilding the table from its effective spans.
 
@@ -621,13 +637,7 @@ def put_span(val, start, end, archive_id):
     """
     if end <= start:
         return val
-    for a, b, _r in spans_of(val):
-        if a < end and start < b:
-            sys.exit(
-                f"the text at {start}-{end} overlaps an existing tracked "
-                f"change ({a}-{b}); recording a change across another would "
-                "silently re-attribute or un-mark part of it. Resolve that "
-                "change in Pages first, or edit with --no-track.")
+    refuse_overlap(val, start, end)
     spans = spans_of(val) + [(start, end, archive_id)]
     marks = {}
     for _a, b, _r in spans:
@@ -645,7 +655,17 @@ class PackageEntries(dict):
     def __init__(self, path, names):
         super().__init__()
         self._path, self._names = path, set(names)
-        st = os.stat(path)
+        self.restamp()
+
+    def check_unchanged(self):
+        """Refuse when the package on disk is no longer the one that was loaded."""
+        st = os.stat(self._path)
+        if (st.st_size, st.st_mtime_ns) != self._stamp:
+            sys.exit(f"{self._path} changed on disk after it was loaded; nothing was written. "
+                     "Run the command again.")
+
+    def restamp(self):
+        st = os.stat(self._path)
         self._stamp = (st.st_size, st.st_mtime_ns)
 
     def load_rest(self):
@@ -653,10 +673,7 @@ class PackageEntries(dict):
         todo = [n for n in self._names if n not in self]
         if not todo:
             return
-        st = os.stat(self._path)
-        if (st.st_size, st.st_mtime_ns) != self._stamp:
-            sys.exit(f"{self._path} changed on disk after it was loaded; nothing was written. "
-                     "Run the command again.")
+        self.check_unchanged()
         with zipfile.ZipFile(self._path) as z:
             for n in todo:
                 self[n] = z.read(n)
@@ -1373,6 +1390,13 @@ class Document:
         report = []
         for start, end, new in sorted(edits, reverse=True):
             delta = len(new)
+            # inside someone else's pending change, shifting would split that change
+            # around this one before put_span could see the overlap
+            fields = parse_fields_of(self._msg)
+            for num in CHANGE_TABLES:
+                if num in fields and table_kind(fields[num][0]) == "index":
+                    refuse_overlap(fields[num][0], start, end)
+                    refuse_overlap(fields[num][0], end, end)
             # a pure deletion inserts nothing and a pure insertion deletes
             # nothing; minting a change for the empty side produced an
             # unterminated span that marked unrelated text
@@ -1439,6 +1463,7 @@ class Document:
         write that produced an ill-formed table once left a document that
         pages2md could not open, while the editor's own re-read said "OK".
         """
+        self.entries.check_unchanged()
         self.entries.load_rest()
         payload = pack_archives(self.arcs)
         self.entries[BODY_ENTRY] = iwa_encode(payload)
@@ -1460,6 +1485,8 @@ class Document:
                      "This is a bug in pages_edit; the edit that caused it is worth "
                      "reporting.")
         os.replace(tmp, out_path)
+        if os.path.abspath(out_path) == os.path.abspath(self.path):
+            self.entries.restamp()        # what is on disk is what this object holds
 
 
 # Structure and pagination are reading concerns, so they live in pages2md.
@@ -1541,8 +1568,8 @@ def written_problems(path):
         check = Document(path)
         problems = table_problems(check)
         check.reader.all_paragraphs()           # the reader must manage it too
-    except Exception as exc:
-        return [f"cannot read it back: {exc!r}"]
+    except (Exception, SystemExit) as exc:      # package_errors reports through sys.exit
+        return [f"cannot read it back: {exc}"]
     return problems
 
 
@@ -2014,6 +2041,7 @@ def cmd_replace(args):
         sys.exit(f"\nPages has {os.path.basename(args.file)} open — it would "
                  "overwrite this edit on its next save. Close it first.")
 
+    doc.entries.check_unchanged()       # before any snapshot of what is on disk
     cfg = load_config(args.file)
     before = None
     if cfg.get("vcs"):
@@ -2056,8 +2084,8 @@ def verify(path, edits, tracked=False):
         text = "\x00".join(parts)
         doc.reader.all_paragraphs()             # and pages2md must be able to read it
         problems = table_problems(doc)
-    except Exception as exc:
-        print(f"VERIFY FAILED: cannot re-read {path}: {exc!r}")
+    except (Exception, SystemExit) as exc:      # package_errors reports through sys.exit
+        print(f"VERIFY FAILED: cannot re-read {path}: {exc}")
         return "?"
     if problems:
         print(f"VERIFY FAILED: ill-formed tables in {path}: {'; '.join(problems[:4])}")
@@ -2117,6 +2145,7 @@ def cmd_plan(args):
             groups.setdefault(handle, []).extend(eds)
     groups = list(groups.items())
     flat = flatten(groups)
+    doc.entries.check_unchanged()       # before any snapshot of what is on disk
     cfg = load_config(args.file)
     summary = f"Apply {os.path.basename(args.plan)}: {total} replacement(s)"
     if cfg.get("vcs"):
@@ -2193,6 +2222,7 @@ def commit(doc, args, summary, describe=None):
     if pages_has_open(args.file):
         sys.exit(f"\nPages has {os.path.basename(args.file)} open — it would "
                  "overwrite this on its next save. Close it first.")
+    doc.entries.check_unchanged()       # before any snapshot of what is on disk
     cfg = load_config(args.file)
     if cfg.get("vcs"):
         vcs_snapshot(args.file, "Before: " + summary)

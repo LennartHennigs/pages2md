@@ -143,6 +143,15 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- A write whose result could not be read back at all (undecodable IWA data) got past the
+  save check, because the reader reports that through `sys.exit`: the `.tmp` file was left
+  behind and there was no "refusing to write". `verify` had the same gap.
+- "Changed on disk" is checked on every save and before the backup or history snapshot is
+  taken; it used to run only when an image was still unread, and after the snapshot.
+- A tracked edit inside someone else's pending insertion was accepted and split that
+  insertion in two around it; it is refused, as one inside a pending deletion already was.
+- A malformed attribute-table entry whose index runs past its own end is left to the
+  general tokenizer instead of being rewritten with an empty payload.
 - The document history works on a machine that signs commits (`commit.gpgsign=true` made
   every write fail with `config --vcs on`); signing is off for the history repo only.
 - A missing `git`, or a git command that fails, ends in one message and changes nothing,
