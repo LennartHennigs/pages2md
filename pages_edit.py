@@ -361,12 +361,11 @@ PARA_END = "\n"
 def after_paragraph(raw, end):
     """Where a new paragraph goes when inserted after one ending at `end`.
 
-    Past whatever ends the paragraph: a newline, or a break character (page break,
-    object anchor, section break) that leads the next one. Stopping short of a break
-    character left it right behind the new text, where it started an empty paragraph
-    of its own.
+    Past its newline, but before a page break, section break or object anchor: those
+    lead what follows, so the new paragraph stays on this one's page and the break
+    ends it instead (see `insert_paragraph`).
     """
-    return end + 1 if raw[end:end + 1] and raw[end] in PARA_BREAKS else end
+    return end + 1 if raw[end:end + 1] == PARA_END else end
 
 
 def para_bounds(raw, offset):
@@ -1152,8 +1151,12 @@ class Document:
         # footnote reference, which sits inside a sentence -- so no newline is needed
         # before the new text; with one added, the break character started an empty
         # paragraph of its own
-        lead = "" if (at == 0 or self.flow(raw)[at - 1] in PARA_BREAKS) else PARA_END
-        body = lead + text + PARA_END
+        flow = self.flow(raw)
+        lead = "" if (at == 0 or flow[at - 1] in PARA_BREAKS) else PARA_END
+        # before a page break, section break or anchor the break itself ends the new
+        # paragraph; a newline as well would leave an empty paragraph in front of it
+        tail = "" if flow[at:at + 1] in ("\x04", "\x05", "\x0e") else PARA_END
+        body = lead + text + tail
         delta = len(body)
         rebuilt = []
         for num, wire, val in tokenize(self._msg):
@@ -1504,7 +1507,7 @@ from pages2md import (outline, section_range, index_path, load_index,
                       C_TEXT, C_DATE, C_AUTHOR, C_NEXT, APPLE_EPOCH,
                       PARA_BREAKS, PARA_SPLIT, F_ATTACHMENTS, footnote_marks,
                       F_LEVELS,
-                      flow_view,
+                      flow_view, FOOTNOTE_MARK,
                       # text is handled as a UTF-16 view; see pages2md
                       u16, from_u16, show)
 from pages2md import _ref as ref_of   # skip a TSP.Reference's tag byte, read the varint
@@ -1784,8 +1787,18 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
         rx = re.compile(pattern if regex else re.escape(pattern), re.MULTILINE)
     except re.error as exc:
         sys.exit(f"invalid regular expression {show(pattern)!r}: {exc}")
-    out, raw_len = [], len(doc.text()[0])
-    for h in rx.finditer(hay.translate(SEARCH_VIEW)):
+    raw = doc.text()[0]
+    out, raw_len = [], len(raw)
+    view = hay.translate(SEARCH_VIEW)
+    marks = doc._footnote_marks(raw)
+    if marks:
+        # a footnote reference sits inside a sentence: it is not a line break to ^ and $
+        at = marks if keep is None else [k for k, r in enumerate(keep) if r in marks]
+        chars = list(view)
+        for k in at:
+            chars[k] = FOOTNOTE_MARK
+        view = "".join(chars)
+    for h in rx.finditer(view):
         s, e = h.start(), h.end()
         if keep is None:
             rs, re_ = s, e

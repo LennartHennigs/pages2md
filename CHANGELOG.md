@@ -63,6 +63,10 @@ Add each change here in the same commit that makes it.
 
 ### Changed
 
+- `insert --after X` and `import --after X`, when a page break, section break or object
+  anchor ends X: the new paragraphs go between X and the break, on X's page, and the break
+  ends the last of them. They used to go after the break, onto the next page or after the
+  anchored object.
 - Faster edits on large documents. `Document.apply` moves each attribute-table entry once
   for all the edits of a call instead of rewriting every table after every edit: 3,000
   replacements in a 109,000-character, 800-entry-per-table document take 50 ms (about 38 ms
@@ -143,6 +147,8 @@ Add each change here in the same commit that makes it.
 
 ### Fixed
 
+- `^` and `$` in a regex search (`find`, `replace`, plans) matched at a footnote reference
+  in the middle of a sentence; a footnote mark is not a line break.
 - A write whose result could not be read back at all (undecodable IWA data) got past the
   save check, because the reader reports that through `sys.exit`: the `.tmp` file was left
   behind and there was no "refusing to write". `verify` had the same gap.

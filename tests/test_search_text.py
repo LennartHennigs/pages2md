@@ -123,5 +123,33 @@ class EmptySearchText(unittest.TestCase):
         self.assertIn("\nBody:\n", P.render_markdown(None, P.PagesDoc(self.path).all_paragraphs()))
 
 
+class FootnoteMarksAreNotLineBreaks(unittest.TestCase):
+    """The search view turned every \\x0e into a newline, so ^ and $ also matched at a
+    footnote reference in the middle of a sentence (CLAUDE.md rule 5)."""
+
+    def setUp(self):
+        from fixture import write_pages, table, F_PARA_TBL, F_ATTACHMENTS
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = write_pages(os.path.join(self.tmp.name, "f.pages"),
+                                "Claim\x0e continues.\nNext\x0eSection\n",
+                                {F_PARA_TBL: table([(0, 1)]), F_ATTACHMENTS: table([(5, 999)])})
+
+    def starts_and_ends(self, pattern):
+        doc = E.Document(self.path)
+        doc.select("body")
+        return [m[0] for m in E.matches(doc, pattern, False, True, None)]
+
+    def test_line_starts_skip_the_footnote_but_not_a_section_break(self):
+        self.assertEqual(self.starts_and_ends("^"), [0, 18, 23, 31])   # 23: after a section break
+
+    def test_line_ends_too(self):
+        self.assertEqual(self.starts_and_ends("$"), [17, 22, 30, 31])
+
+    def test_a_replacement_through_the_cli(self):
+        msg, _ = cli("replace", "--regex", "-f", "^ continues", "-r", "x", "--all", self.path)
+        self.assertIn("no match", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

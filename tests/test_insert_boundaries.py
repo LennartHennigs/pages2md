@@ -25,7 +25,7 @@ def starts(doc):
     return doc.paragraph_starts(0, len(doc.text()[0]))
 
 
-class AtAParagraphLedByABreak(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -35,6 +35,9 @@ class AtAParagraphLedByABreak(unittest.TestCase):
         if attachments:
             tables[F_ATTACHMENTS] = table(attachments)
         return E.Document(write_pages(os.path.join(self.tmp.name, "t.pages"), text, tables))
+
+
+class AtAParagraphLedByABreak(Base):
 
     def test_each_break_character_counts_as_a_paragraph_start(self):
         for char in ("\x04", "\x05", "\x0e"):
@@ -81,6 +84,40 @@ class AtAParagraphLedByABreak(unittest.TestCase):
         self.assertEqual(doc.text()[0], "A\nB\nNEW\n")
 
 
+class AfterAParagraphThatABreakEnds(Base):
+    """`insert --after X` where a page break, section break or anchor ends X: the new
+    paragraph goes between X and the break, so it stays on X's page; the break now ends
+    the new paragraph. It used to go after the break, onto the next page."""
+
+    def insert_after(self, doc, offset, text, style):
+        _ps, pe = doc.paragraph_bounds(offset)
+        return doc.insert_paragraph(E.after_paragraph(doc.text()[0], pe), text, style)
+
+    def test_each_break_character(self):
+        for char in ("\x04", "\x05", "\x0e"):
+            with self.subTest(break_char=repr(char)):
+                doc = self.doc(f"A{char}B\nC\n", [(0, S1), (2, S2)])
+                before = len(starts(doc))
+                self.insert_after(doc, 0, "NEW", S3)
+                self.assertEqual(doc.text()[0], f"A\nNEW{char}B\nC\n")
+                self.assertEqual(len(starts(doc)), before + 1)
+
+    def test_styles_stay_on_their_paragraphs(self):
+        doc = self.doc("A\x04B\n", [(0, S1), (2, S2)])
+        self.insert_after(doc, 0, "NEW", S3)
+        self.assertEqual(rows(doc, F_PARA_TBL), [(0, S1), (2, S3), (5, S1), (6, S2)])
+
+    def test_after_a_newline_and_then_a_break(self):
+        doc = self.doc("A\n\x05B\n", [(0, S1), (3, S2)])
+        self.insert_after(doc, 0, "NEW", S3)
+        self.assertEqual(doc.text()[0], "A\nNEW\x05B\n")
+
+    def test_after_a_footnote_reference_is_not_a_break(self):
+        doc = self.doc("See\x0e more.\nNext\n", [(0, S1)], attachments=[(3, 999)])
+        self.insert_after(doc, 0, "NEW", S1)
+        self.assertEqual(doc.text()[0], "See\x0e more.\nNEW\nNext\n")
+
+
 @unittest.skipUnless(os.path.exists(SAMPLE), "sample not present")
 class OnTheRealGuide(unittest.TestCase):
     """sample-content.pages: several headings are led by \\x05 anchors."""
@@ -125,10 +162,14 @@ class OnTheRealGuide(unittest.TestCase):
         headings = [(l, t) for l, t, _o in P.outline(self.path)]
         self.assertIn((2, "What It Is"), headings)
 
-    def test_insert_after_is_unchanged(self):
+    def test_insert_after_a_paragraph_an_anchor_ends(self):
         before = self.sig()
         self.run_cli("insert", "--after", "get started", "--text", "Inserted after.", "--style", "Body 1")
         self.assert_only_added(before, ["Inserted after."])
+        raw = P.PagesDoc(self.path)._raw_text()
+        at = raw.index("Inserted after.")
+        self.assertEqual(raw[at - 20:at], "Let’s get started…\t\n")    # right after it,
+        self.assertEqual(raw[at + 15], "\x05")                         # before the anchors
 
     def test_import_before_a_heading_led_by_an_anchor(self):
         before = self.sig()
