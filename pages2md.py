@@ -856,7 +856,10 @@ def _emphasize(raw, runs):
         mark = "**" if bold else ("*" if italic else "")
         seg = raw[start:end]
         core = seg.strip()
-        if not mark or not core:
+        # a run over only invisible characters (a footnote reference has its
+        # own italic/underline style) would leave bare markers behind once
+        # _clean strips them
+        if not mark or not _clean(core, False):
             continue
         lead = seg[:len(seg) - len(seg.lstrip())]
         trail = seg[len(seg.rstrip()):]

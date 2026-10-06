@@ -52,6 +52,18 @@ class FootnoteIsInline(unittest.TestCase):
         para = doc.reader.paragraphs()[0]
         self.assertEqual([r[:3] for r in para["runs"]], [(start, start + 11, True)])
 
+    def test_styled_reference_leaves_no_stray_markers(self):
+        # the reference itself is italic+underline in Pages; it must not turn
+        # "*wicked problem*" into "*wicked problem***"
+        doc = E.Document(write_pages(
+            os.path.join(self.tmp.name, "i.pages"), TEXT,
+            {F_PARA_TBL: table([(0, 1)]), F_ATTACHMENTS: table([(MARK, REF)]),
+             F_CHAR_TBL: table([(2, 901), (MARK, 902), (MARK + 1, None)])},
+            extra=[(901, T_CHAR_STYLE, char_style(italic=True)),
+                   (902, T_CHAR_STYLE, char_style(italic=True))]))
+        out = P.render_markdown(None, doc.reader.all_paragraphs())
+        self.assertTrue(out.startswith("A *wicked problem* is ill-defined."), out)
+
     def test_paragraph_bounds_span_the_marker(self):
         doc = E.Document(self.path)
         self.assertEqual(doc.paragraph_bounds(3), (0, SECOND - 1))

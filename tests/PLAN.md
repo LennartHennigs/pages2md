@@ -12,6 +12,7 @@ same zip → IWA → archive → storage path as a real document.
 | `test_format.py` | review finding 1.5: `format` produces one clean run, `--plain`, new tables, no re-parse |
 | `test_edit_tables.py` | review findings 1.1–1.4: runs carried across paragraph deletion, inserted text isolated from preceding runs, empty tracked-change spans, comment ranges clamped; minimal direct replacements |
 | `test_footnotes.py` | footnote references (`\x0e` + attachment entry) are inline: reader paragraphs, editor bounds/starts/delete/retag, kitchen-sink sentence |
+| `test_samples.py` (`RealGuide`) | the real 14.5 guide: footnoted sentences whole, localised styles, lead-in emphasis, comments, edit/insert/format/delete round trips on a copy |
 | `test_guard.py` | the Pages-open guard does not crash without `osascript` |
 | `test_samples.py` | real Pages 15.4 files: 1.6 settled (tables count UTF-16 units); reading and editing after emoji; kitchen-sink smoke tests (codec, every format, headings, lists, tracked changes, comments in body and margin note, fingerprints) |
 

@@ -37,3 +37,11 @@ Still wanted, in a later sample: a text box with text and a comment, a figure ca
 a generated table of contents, and bold runs that cross paragraph breaks. For the
 batch-deletion test, also a copy edited with `import --replace-section` that has been
 opened and saved by Pages.
+
+## `sample-content.pages`
+
+A real document (a German-localised guide, saved by Pages 14.5), not built for testing:
+headings 1–2, bold and italic lead-ins, two footnotes (Footnote Text style), two comments
+on headings, localised style names ("Text", "Überschrift", "Fußnote"). It found the
+footnote paragraph-splitting bug. The comment author's name was replaced with "Sample
+Author"; the text and two hyperlinks are unchanged.
