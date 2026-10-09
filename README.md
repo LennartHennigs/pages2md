@@ -646,24 +646,38 @@ unverified unless stated. Each one that needs a sample is listed in
 
 ## Using with Claude
 
-The repo ships two [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skills)
-in `.claude/skills/`, so Claude can use the tools without an MCP server or any setup:
+This repository is also a Claude Code plugin marketplace. It carries two
+[skills](https://docs.claude.com/en/docs/claude-code/skills), so Claude can read and edit
+`.pages` files on your machine without an MCP server:
 
-| Skill | Does | Idle cost |
-| --- | --- | --- |
-| `pages-read` | reads a `.pages` file as Markdown, JSON, outline, comments or links; never writes | its description only |
-| `pages-edit` | edits one: dry run first, fingerprint pinned with `--expect`, backups kept, the known limits spelled out (`reference.md` holds the rest) | its description only |
+| Skill | Does |
+| --- | --- |
+| `pages-read` | reads a `.pages` file as Markdown, JSON, outline, comments or links; never writes |
+| `pages-edit` | edits one: dry run first, fingerprint pinned with `--expect`, backups kept, the known limits spelled out (`reference.md` holds the rest) |
 
-Only the short descriptions are always in Claude's context; a skill's instructions load when
-a request matches it, and `pages-edit` stays unloaded for read-only work.
+Only each skill's one-line description is always in Claude's context; the instructions load
+when a request matches, so `pages-edit` stays unloaded for read-only work.
 
-- **Claude Code (terminal, VS Code extension, web/cloud sessions):** open the checkout, or a
-  repository that contains your documents next to a copy of `.claude/skills/`; nothing else to
-  install. Cloud sessions see only files in the cloned repository.
-- **Other projects on your Mac:** copy the two folders to `~/.claude/skills/` and call the
-  scripts by absolute path.
-- Both need a shell and Python 3.13 (`uv run python`). Page numbers (`--page`) need
-  `pages_edit.py index`, which only works on a Mac with Pages.
+```text
+/plugin marketplace add LennartHennigs/pages2md
+/plugin install pages2md@pages2md
+```
+
+Run those in Claude Code (terminal or the VS Code extension). On Claude Code 2.1.275 or
+later, `/plugin install pages2md --marketplace LennartHennigs/pages2md` does both in one
+step. The plugin copies the whole repository, so the scripts the skills call travel with
+them and need nothing else installed. `/plugin marketplace update` pulls new commits; there
+is no pinned version, so every push to `main` is an update.
+
+- **Where it runs:** on the machine that has the `.pages` file. A cloud session only sees
+  files in its cloned repository, so for a document on your Mac use Claude Code locally.
+- **Needs:** a shell and Python 3.13+. Page numbers (`--page`) need `pages_edit.py index`,
+  which only works on a Mac with Pages.
+- **Working on the skills:** `claude --plugin-dir .` loads them from the checkout, and
+  `/reload-plugins` picks up edits. `claude plugin validate .` checks the manifests (it warns
+  about `CLAUDE.md` at the plugin root and the missing version; both are intentional).
+- **No Claude Code?** The command lines in `skills/pages-read/SKILL.md` and
+  `skills/pages-edit/` work in any terminal.
 
 The same rules apply as for the command line: edits are a dry run until `--write`, and
 nothing the editor writes has been opened in Pages yet, so use a copy.

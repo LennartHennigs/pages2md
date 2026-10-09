@@ -1,14 +1,16 @@
-"""The Claude skills in .claude/skills/ must keep matching the command line.
+"""The Claude plugin (skills/ and .claude-plugin/) must keep matching the command line.
 
 Every `pages2md.py` / `pages_edit.py` command quoted in a skill is run (as a dry run, on a
 copy of a sample) and must not be rejected by argparse: a flag that was renamed or removed
 makes the skill teach a command that no longer exists. Pages and `osascript` are never
 touched, so `index` is skipped.
 """
-import glob, os, re, shlex, shutil, subprocess, sys, tempfile, unittest
+import glob, json, os, re, shlex, shutil, subprocess, sys, tempfile, unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKILLS = os.path.join(ROOT, ".claude", "skills")
+SKILLS = os.path.join(ROOT, "skills")
+PLUGIN_DIR = os.path.join(ROOT, ".claude-plugin")
+PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"
 SAMPLE = os.path.join(ROOT, "tests", "samples", "kitchen-sink.pages")
 EXPECTED = {"pages-read", "pages-edit"}
 MAX_DESCRIPTION = 300          # the description is the only part always in context
@@ -105,6 +107,49 @@ class Safety(unittest.TestCase):
                             self.assertIn("--expect", cmd)
 
 
+class Plugin(unittest.TestCase):
+    """The repo is its own marketplace: `/plugin marketplace add LennartHennigs/pages2md`."""
+
+    def load(self, name):
+        with open(os.path.join(PLUGIN_DIR, name), encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_manifest(self):
+        meta = self.load("plugin.json")
+        self.assertEqual(meta["name"], "pages2md")
+        self.assertRegex(meta["name"], r"^[a-z0-9]+(-[a-z0-9]+)*$")      # kebab-case
+        self.assertFalse(meta["name"].startswith(("claude-", "anthropic-")))
+        self.assertTrue(meta["description"])
+        # no pinned version: users follow the repository, not a number nobody bumps
+        self.assertNotIn("version", meta)
+
+    def test_marketplace_lists_the_plugin_at_the_repo_root(self):
+        market = self.load("marketplace.json")
+        self.assertTrue(market["name"])
+        self.assertTrue(market["owner"]["name"])
+        entries = {e["name"]: e for e in market["plugins"]}
+        self.assertEqual(set(entries), {self.load("plugin.json")["name"]},
+                         "the entry name must equal the manifest name")
+        self.assertEqual(entries["pages2md"]["source"], "./")
+        self.assertTrue(entries["pages2md"]["description"])
+
+    def test_the_scripts_the_skills_call_ship_with_the_plugin(self):
+        # the plugin root is the repo root, so these are what ${CLAUDE_PLUGIN_ROOT} holds
+        for name in ("pages2md.py", "pages_edit.py", "iwa_codec.py"):
+            self.assertTrue(os.path.exists(os.path.join(ROOT, name)), name)
+
+    def test_skills_find_the_scripts_through_the_plugin_root(self):
+        for path in skill_files():
+            with open(path, encoding="utf-8") as fh:
+                for cmd in commands(fh.read()):
+                    with self.subTest(path=os.path.relpath(path, ROOT), cmd=cmd):
+                        self.assertIn(PLUGIN_ROOT + "/", cmd)
+
+    def test_no_second_copy_of_the_skills(self):
+        # a project copy next to the plugin would load every skill twice
+        self.assertFalse(os.path.exists(os.path.join(ROOT, ".claude", "skills")))
+
+
 class Commands(unittest.TestCase):
     """Run every quoted command; argparse exits 2 on an unknown flag or missing argument."""
 
@@ -118,7 +163,7 @@ class Commands(unittest.TestCase):
         words = shlex.split(cmd, comments=True)
         while words and not SCRIPT.search(words[0]):
             words.pop(0)                       # drop `uv run python`, `python3`
-        words[0] = os.path.join(ROOT, os.path.basename(words[0]))
+        words[0] = words[0].replace(PLUGIN_ROOT, ROOT)
         words = [w for w in words if w != "--write"]      # dry runs only
         return [sys.executable] + [self.doc if w.endswith(".pages") else w for w in words]
 

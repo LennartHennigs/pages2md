@@ -14,7 +14,7 @@ all|body|notes|noteN`, `--occurrence N`, `--all`, `--regex` (`\1` works in the r
 ## Plans (many replacements, one pass)
 
 ```bash
-uv run python pages_edit.py plan edits.json report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" plan edits.json report.pages
 ```
 
 `edits.json` is a list of edits, or `{"fingerprint": "FP", "edits": [...]}`. Per-edit keys:
@@ -32,8 +32,8 @@ before anything is written. `--track` / `--no-track` apply to the whole plan.
 ## Comments
 
 ```bash
-uv run python pages_edit.py comment reply --at 6840 --text "Done." --expect FP report.pages
-uv run python pages_edit.py comment delete --at 6840 --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" comment reply --at 6840 --text "Done." --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" comment delete --at 6840 --expect FP report.pages
 ```
 
 `--at` is the anchor offset printed by `pages2md.py --comments`. Comments do not change the
@@ -42,12 +42,12 @@ text, so the fingerprint stays the same. Comments cannot be written inside a tex
 ## Structure
 
 ```bash
-uv run python pages_edit.py format --on "Start here." --bold --expect FP report.pages
-uv run python pages_edit.py format --on "Read this first." --plain --expect FP report.pages
-uv run python pages_edit.py retag --on "Configure the client" --style "Heading 3" --list None --expect FP report.pages
-uv run python pages_edit.py delete-paragraph --on "This paragraph is outdated" --expect FP report.pages
-uv run python pages_edit.py import new-section.md --after "Advanced Usage" --expect FP report.pages
-uv run python pages_edit.py import replacement.md --replace-section "Getting Started" --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" format --on "Start here." --bold --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" format --on "Read this first." --plain --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" retag --on "Configure the client" --style "Heading 3" --list None --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" delete-paragraph --on "This paragraph is outdated" --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" import new-section.md --after "Advanced Usage" --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" import replacement.md --replace-section "Getting Started" --expect FP report.pages
 ```
 
 `import` turns `#`-`####` headings, paragraphs and `-`/`*` bullets into styled paragraphs
@@ -59,9 +59,9 @@ Deleting a paragraph that holds a footnote reference is refused.
 ## Tracked changes
 
 ```bash
-uv run python pages_edit.py config report.pages                    # show settings
-uv run python pages_edit.py replace -f old -r new --track --expect FP report.pages
-uv run python pages2md.py --changes mark report.pages              # ~~old~~new shows what is pending
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" config report.pages                    # show settings
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" replace -f old -r new --track --expect FP report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages2md.py" --changes mark report.pages              # ~~old~~new shows what is pending
 ```
 
 A tracked edit leaves the original as a pending deletion and inserts the replacement. The
@@ -72,9 +72,9 @@ pending change is refused.
 ## History and undo
 
 ```bash
-uv run python pages_edit.py config --vcs on report.pages           # keep snapshots in .pages-vcs/
-uv run python pages_edit.py history report.pages
-uv run python pages_edit.py revert HEAD~1 report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" config --vcs on report.pages           # keep snapshots in .pages-vcs/
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" history report.pages
+python3 "${CLAUDE_PLUGIN_ROOT}/pages_edit.py" revert HEAD~1 report.pages
 ```
 
 With history off, each write leaves `report.pages.bak` next to the file instead. A revert is
