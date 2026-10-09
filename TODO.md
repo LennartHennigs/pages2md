@@ -1,0 +1,35 @@
+# TODO
+
+Open work, newest thinking first. Remove an item in the commit that finishes it; the
+change itself goes in `CHANGELOG.md`. Tests still to write are in `tests/PLAN.md`.
+
+## Needs a Mac with Pages
+
+- [ ] Run `uv run python tests/pages_roundtrip.py all /tmp/roundtrip` and read `report.md`.
+      Nothing written by `pages_edit` has been opened in Pages yet (see `insights.md`,
+      "Still unproven").
+- [ ] Find the cause of the "10+ deletions strip every heading style" corruption; then lift
+      the three-paragraph limit on `import --replace-section` and allow `clear_range`.
+
+## Bugs
+
+- [ ] Deleting a paragraph that holds a footnote reference is refused. Do it properly
+      (remove the note's storage, its attachment archive and any comments in it) once
+      Pages has been shown a file like that.
+- [ ] The empty paragraph after a final newline inherits its predecessor's style and list
+      level (retag, insert at the end). Needs a look at what Pages does.
+- [ ] Get a Pages document that never had a comment, to see whether it has an annotation
+      author archive (`comment add` relies on one when no comment exists).
+
+## Features
+
+- [ ] Support a Pages package that is a folder instead of a zip.
+
+## Code health
+
+- [ ] `apply_tracked` still rewrites every table after each edit (about 11 ms per edit on a
+      100,000-character document); `insert_paragraph`/`delete_paragraph` are one edit each.
+
+## Samples wanted
+
+- [ ] `fidelity.pages`: tables, images, nested numbered lists, text boxes.

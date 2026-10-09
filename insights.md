@@ -6,7 +6,18 @@ round-trip. The result is `pages2md.py` — a dependency-free, pandoc-style CLI 
 
 Numbers below are from testing against a real multi-chapter document (roughly 140
 printed pages, ~80,000 characters, ~800 paragraphs) to keep the evidence concrete, with
-its actual content left out.
+its actual content left out. That document is not in the repository. The claims that
+came later rest on the small documents in `tests/samples/` (Pages 14.5 and 15.4), each
+named where it is used; where a claim has only been seen once, the text says so.
+
+Two general habits paid for themselves, and are worth keeping:
+
+- **Make a sample that varies one thing**, in Pages, and diff its tables against a
+  neighbour. Every field meaning below that was measured, not guessed, came from that.
+- **Use what Pages already labels.** Its built-in character styles are named ("Underline",
+  "Strikethrough"), so their properties are a dictionary. And every `.pages` package
+  embeds `preview.jpg`, a rendering of page one, which is an independent oracle for
+  anything visible: list levels, strikethrough, footnote marks.
 
 ## Why Bother
 
@@ -49,10 +60,14 @@ Test document: 2,262 archives across 7 `.iwa` files, 288 KB decompressed.
 | Type | Meaning |
 | --- | --- |
 | 2001 | `TSWP.StorageArchive` — text. 261 of them in the test document; the **largest is the body flow** |
+| 2008 | an attachment: field 2 references the text storage of a footnote |
+| 2013 | a comment reference (heads a thread) |
 | 2021 | character style |
 | 2022 | paragraph style |
 | 2023 | list style |
+| 2032 | a hyperlink smart field: field 2 is the URL |
 | 2060 | a tracked change |
+| 3056 | one comment in a thread |
 
 Style **names** are not in `Document.iwa` — they are in `Index/DocumentStylesheet.iwa`,
 so you must index every `.iwa` before resolving refs.
@@ -97,13 +112,33 @@ styles — around 40 out of a few hundred on the test document.
 ### `\x04` and `\x05` lead a paragraph, they do not end it
 
 The text uses `\n` for paragraph breaks, but Pages also emits `\x04` (page break),
-`\x05` (object anchor) and `\x0e` (section break) **before** a paragraph's text. Splitting
+`\x05` (object anchor) and `\x0e` (a section break, unless it is a footnote reference —
+see below) **before** a paragraph's text. Splitting
 on `\n` alone leaves paragraph starts a few characters short of their style entries, so
 headings silently resolve to body text. Split on `[\n\x04\x05\x0e]`.
+
+**Except `\x0e` is not always a break.** In documents with footnotes, a footnote's
+reference is a `\x0e` in the middle of a sentence, with an entry at its offset in the
+attachment table (field 16) pointing at the footnote's storage. Treating it as a section
+break cut every footnoted paragraph in two -- the sentence broke around the note and the
+second half lost its paragraph style. Seen in Pages 14.5 and 15.4 files. A `\x0e`
+*without* an attachment entry is still treated as a break (nothing has shown what else it
+could be). Both tools find paragraph boundaries on `flow_view`, the text with those
+references neutralised, so they cannot disagree.
 
 Also present: `U+2028` (line separator) inside headings that wrap across two lines in the
 original layout, and `U+FFFC` (object replacement character) as an inline object
 placeholder.
+
+Treat these characters as **separators**, like the newline. A new paragraph goes between two
+paragraphs; if the separator between them is a break character, it already ends the text
+before it, and adding a newline as well leaves an empty paragraph between the new text and
+the break. So `insert_paragraph` adds a leading newline only when the character before the
+insertion point is not a separator, and `after_paragraph` steps over whatever ends the
+paragraph. A `\x0e` that is a footnote reference is the one break character that is not a
+separator (see below). Where the break character ends up -- leading the new paragraph or the
+one that follows -- is a guess: no sample shows what Pages does with an anchor in front of a
+paragraph that was inserted before.
 
 ### Tracked changes are the real correctness issue
 
@@ -124,7 +159,11 @@ yields the current, resolved text:
 ### Bold/italic live in the style properties
 
 `field 11` of a style archive is the properties message: `field 1` = bold, `field 2` =
-italic, `field 3` = size (LE float), `field 5` = font name, `field 10` = underline.
+italic, `field 3` = size (LE float), `field 5` = font name, `field 11` = underline,
+`field 12` = strikethrough. (An earlier version of these notes said `field 10` was
+underline. It is not: Pages' own built-in "Underline", "Strikethrough", "Italic" and
+"Emphasis" styles set 11, 12, 2 and 1, and field 10 appears only on the style of a
+footnote reference, which is superscript. Seen in Pages 14.5 and 15.4 files.)
 Sniffing the font name alone found only 13 of 236 bold runs on the test document —
 read the booleans.
 
@@ -136,6 +175,40 @@ style, so the character runs underneath it are redundant and produce stray `****
 When filtering deleted characters out of a paragraph, advance the running offset by the
 paragraph's **original** width. Advancing by the shrunken length drifts every subsequent
 lookup — this quietly deleted tens of kilobytes of good text in an early version.
+
+### Character indices count UTF-16 code units
+
+Every attribute table indexes the text the way NSString does: in UTF-16 code units, not
+characters. An emoji or any other character outside the Basic Multilingual Plane is one
+Python character but two units, so each one shifts every later index by one. Measured
+on `tests/samples/emoji.pages` (Pages 15.4): with two emoji in front, the bold word, the
+heading and the comment sit at Python index 4/21/45 but at table index 6/23/49.
+
+Both tools therefore work on a *UTF-16 view* of the text (`pages2md.u16`): a string in
+which each astral character is spelled as its surrogate pair. Its `len()` and slices
+count exactly what the tables count, so no offset arithmetic needs converting. Text
+goes back through `from_u16` only to be shown or written. Offsets the tools print
+(`@123`) are in these units too, so they agree with Pages' tables and with each other.
+An edit whose boundary falls between the two halves of a pair is refused.
+
+### Hyperlinks, list kinds and list restarts
+
+- **Hyperlinks** are field 11 of a text storage, a run-length smart-field table: an
+  entry points at a `type 2032` archive and runs to the next entry, a null entry ends
+  it. The archive's field 1 is a UUID string, field 2 the URL. Other smart fields (dates,
+  page numbers) share the table with other archive types. In `sample-content.pages` the
+  only links are in a footnote, so they live in that footnote's storage, not the body's.
+- **List kind** is the first label type of the list-style archive (field 11, one value per
+  level): 0 none, 1 image, 2 bullet text, 3 numbered. "Lettered", "Numbered" and "Harvard"
+  are all 3. The semantic names in field 1 stay English in a German document, but the
+  label type is what to trust.
+- **List levels** are field 6, run-length, entries `{index, level, 0}`: an entry holds
+  until the next. In `formatting.pages`: `This` = 0, `Is` and `A bulleted` = 1 (one entry
+  covers both), `list` = 2, then an entry back to 0. The document's preview image agrees.
+  Deleting a paragraph used to drop its entry and demote the paragraphs that relied on it.
+- **List restarts** are field 14, entries `{index, first, second}`: `first = 1` at the
+  paragraph that starts a list, `0` at the next one to say "continue". Not read: any
+  start-at value (probably `second`).
 
 ## How I Got This Wrong
 
@@ -165,6 +238,9 @@ Two lessons:
 
 ## The CLI
 
+Footnotes come out as Markdown `[^n]` references with definitions at the end, links as
+`[text](url)`, nested numbered and bulleted lists as indented lists.
+
 ```bash
 pages2md.py report.pages                  # Markdown (changes accepted)
 pages2md.py -t plain -o out.txt report.pages
@@ -179,8 +255,9 @@ finished downloading from iCloud is a `MacOS Alias file`, not a real document.
 
 ## Writing Back
 
-Reading is forgiving; writing is not. `pages_edit.py` replaces text in the body flow, and
-`iwa_codec.py` is the lossless codec underneath it.
+Reading is forgiving; writing is not. `pages_edit.py` replaces text and restructures
+paragraphs in the body flow, footnotes and other storages, writes comments, and keeps a
+history; `iwa_codec.py` is the lossless codec underneath it.
 
 ### Round-trip first, edit second
 
@@ -307,27 +384,63 @@ Two things to get right:
   the paragraph table where it means "inherit". So closing a run means restoring whatever
   applied at its end, null included — carried, not skipped.
 
-### Run-length structures bite three times
+### Run-length structures bite every time
 
-Paragraph styles, list styles and change spans are all run-length: an entry says "from
-here on", and most paragraphs carry a *null* entry meaning "no change". Every structural
-operation therefore affects text it does not touch, and the failure is always silent:
+Most attribute tables are run-length: an entry says "from here on" and holds until the
+next. What a *null* entry (an index with no reference) means differs by table, and
+mixing the two up was the worst early mistake:
+
+| Table | Field | A null entry means |
+| --- | --- | --- |
+| paragraph styles | 5 | no change: the style persists |
+| list styles | 7 | no change: the style persists |
+| character styles | 8 | no override: back to the paragraph's own formatting |
+| tracked insertions, deletions | 21, 22 | the span ends here |
+| smart fields (links) | 11 | the span ends here |
+| comments (text boxes, and the body in Pages 15.4) | 23 | the span ends here |
+| list levels | 6 | (entries carry numbers, not references) the level holds until the next entry |
+
+Every structural operation therefore affects text it does not touch, and the failure is
+always silent:
 
 - Inserting a `Heading 2` turned **every following paragraph** into a heading, because
   they inherited rather than stating their own style.
 - Deleting a paragraph handed its style to the one after it.
 - Importing a bullet list made the next plain paragraph a bullet.
+- Deleting a paragraph inside a bold run, or a tracked change, dropped the entry that
+  *ended* it, so the run carried on over everything after. It also took a nested list
+  item's level with it, and the items that relied on that entry went up a level.
+- Inserting a paragraph after bold text made it bold, and after a tracked change made it
+  part of that change.
+- A zero-length tracked span wrote an opener with no closer: the "change" ran on to the
+  next entry.
 
 The fix is the same each time: before changing anything, read what the *following*
 paragraph resolves to today, and pin it explicitly afterwards. And read it **before**
 shifting the table — after the shift, the entry that sat at the insertion point has
 moved, and the nearest remaining one is the thing you just inserted. That subtlety cost
-a second round of bullet-bleed after the pattern seemed handled.
+a second round of bullet-bleed after the pattern seemed handled. For the tables that
+mean "the span ends here", the same rule reads: carry the value in force after the
+deleted text back to where it started, and close a run at an insertion.
+
+A run can also be edited out of existence. Replacing the whole of a bold word, a comment
+anchor or a language run with nothing moves both of its entries -- the opener and the
+closer -- onto one index. Pages never writes two entries at an index, and the reader's
+`sorted((index, ref))` raised `TypeError` comparing a reference with `None`. The rule that
+applies is the later entry (an opener after a closer starts the run; a closer after an
+opener ends a run of zero length), so `shift_table` keeps the last entry per index, and
+`Document.save` checks every table before replacing the file. The real samples are clean
+under that check, which is what makes it a safe test of a write.
+
+One table is the exception that proves the rule: for a list level an *inserted*
+paragraph should inherit, because the new item is a sibling of the one before it.
+Work out which behaviour is wanted per table; do not apply one rule to all of them.
 
 A related trap in paragraph-boundary detection: a paragraph begins after *any* break
 character (`\n`, `\x04`, `\x05`, `\x0e`), not just a newline. Anchoring on `\n` alone put
 the style entry one or two characters early, where it parsed fine, wrote fine, and did
-nothing at all.
+nothing at all. And `\x0e` is only a break when it has no attachment entry: with one it
+is a footnote reference in the middle of a sentence.
 
 ### Guards belong to operations, not to code paths
 
@@ -379,10 +492,16 @@ table (field 23) instead of the body's range-keyed one (field 25), closed by the
 entry rather than by an explicit length. Same comment archives, different table shape —
 worth checking for whenever a "simple" field turns out to vary by storage.
 
+The split is not by storage either. In `tests/samples/emoji.pages` (Pages 15.4) the
+**body** keys its comments run-length in field 23 and has no field 25. In
+`kitchen-sink.pages`, saved by the same version, the body uses field 25. Readers and
+writers have to go by which field is present, never by which storage they are in.
+
 ### The body flow is not the document
 
-Margin notes holding a meaningful fraction of a document's prose (around 5% on the test
-document) live in their own text storages, reached from the body's attachment table
+Footnotes (and margin notes: both are "notes", a text storage anchored in the body) holding a
+meaningful fraction of a document's prose (around 5% on the test document) live in their
+own text storages, reached from the body's attachment table
 (`field 16`): each entry maps a character index to a type `2008` archive whose `field 2`
 references the note's storage. One hop, no searching. Nothing warns you they exist; a
 body-only reader just returns less text than the document contains.
@@ -475,8 +594,9 @@ survive the author working elsewhere in the document in the meantime.
 ### Fingerprint the text, not the file
 
 Pages rewrites the entire package on every save, so the file hash changes when nothing
-meaningful did — useless for detecting a real edit. Hashing the body text instead gives a
-stable identity, and refusing to write when it has moved closes the gap that the
+meaningful did — useless for detecting a real edit. Hashing the text instead (every
+storage but the generated table of contents, one definition shared by both tools — the
+reader used to leave out captions, and the two quietly disagreed) gives a stable identity, and refusing to write when it has moved closes the gap that the
 open-in-Pages guard does not: someone editing and saving *after* a read, whose offsets
 are then silently wrong.
 
@@ -497,11 +617,36 @@ With the setting off, a plain `.bak` is written instead. Both belong in `.gitign
 
 ### Still unproven
 
-Only the body flow is editable — text boxes, headers and footers each live in their own
-storage. And indices are shifted only within the edited storage; if another archive
-elsewhere holds offsets into the body text, it would not be updated. No evidence of one
-was found, but it cannot be ruled out, which is the reason the snapshot happens before
-the write and not after.
+- **No write from the work in the changelog's *Unreleased* section has been opened in
+  Pages.** The unit tests and the real sample documents check what the tools read back,
+  not what Pages accepts. `tests/pages_roundtrip.py` exists to settle it (edit a copy, have
+  Pages save it, re-read, compare, per kind of write); it has not been run on a Mac yet.
+- Headers and footers are not reached. Comments cannot be written inside a text box.
+- Indices are shifted only within the edited storage; if another archive elsewhere holds
+  offsets into the body text, it would not be updated. No evidence of one was found, but
+  it cannot be ruled out, which is the reason the snapshot happens before the write and
+  not after.
+- UTF-16 offsets were measured for character styles, paragraph styles and comments. The
+  other tables are assumed to follow.
+- The meaning of a list's start-at value, of the restart table's `second` field, and what
+  Pages does to restarts when the first item of a numbered list is deleted are unknown.
+- Whether a `\x0e` without an attachment entry is a section break has not been seen.
+- `comment add` in a document with no comment takes the author from the annotation author
+  archive (type 212, in `AnnotationAuthorStorage-*.iwa`; all four samples have exactly one,
+  next to a type 213 archive of 6 bytes). Only tested on a synthetic file: a Pages document
+  that never had a comment may not have that archive at all, and then the command says so.
+- A paragraph that holds a footnote reference cannot be deleted: its note's storage and
+  archives (and any comment in it) would stay in the file unreferenced, and no document
+  like that has been opened in Pages. The tools refuse instead (`delete-paragraph`,
+  `import --replace-section`). What Pages itself does with the note when you delete the
+  sentence is the thing to look at on a Mac.
+- Deleting the last paragraph (no terminator of its own), or one that a page break or
+  object anchor ends, also removes the *previous* paragraph's newline; deleting only the
+  text left that newline in front of nothing, i.e. an empty paragraph. Checked on the
+  samples with the reader, not in Pages (`delete-before-anchor` is the harness case).
+- The empty paragraph after a final newline has no style entry of its own and so inherits
+  its predecessor's, including after a `retag` or an insert at the end. Whether Pages
+  does the same for a typed one has not been checked.
 
 ### An unresolved corruption in batch paragraph deletion
 
@@ -540,6 +685,17 @@ document on open is not known.
 limit, or chaining many `delete-paragraph` calls in one write, is not supported until
 this is root-caused. A `clear_range` helper exists for a future investigation but should
 not be called directly. Issue reports with a reproduction are very welcome.
+
+**A lead, not yet confirmed in Pages.** `drop_entries_in` used to drop every entry
+inside the deleted paragraph, including the *terminator* of a run that started before
+it. In a run-length table (character styles, tracked changes) the run then continued
+until the next entry anywhere in the document -- a character style bleeding over every
+later heading would look exactly like the symptom above, and more deletions make it more
+likely that one of them removes such a terminator. `delete_paragraph` now carries the
+run in force at the end of the deleted span back to its start, and re-states the
+following paragraph's list style as well as its paragraph style
+(`tests/test_edit_tables.py`). The 3-paragraph limit stays until a real Pages
+round-trip confirms this was the cause.
 
 One operational note from chasing this live: repeated open/save/close cycles against
 Pages during testing left the application itself sluggish — later AppleEvents timed out

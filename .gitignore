@@ -7,3 +7,7 @@ __pycache__/
 *.pages.bak
 .pages-index.json
 .pages-edit.json
+
+# uv
+.venv/
+.coverage

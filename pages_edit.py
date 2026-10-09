@@ -18,7 +18,8 @@ snapshot of every version so any edit can be undone:
     pages_edit.py history book.pages
     pages_edit.py revert HEAD~1 book.pages
 """
-import argparse, difflib, json, os, random, re, shutil, struct, subprocess, sys, time, uuid, zipfile
+import argparse, bisect, difflib, json, os, random, re, shutil, struct, subprocess, sys, time, uuid, zipfile
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from iwa_codec import (archives, pack_archives, iwa_decode, iwa_encode,
@@ -47,12 +48,17 @@ def char_value_at(val, index):
     Unlike the paragraph table, a null entry here is meaningful -- it means
     "no override from here" -- so it must be carried, not skipped.
     """
+    row = row_at(val, index)
+    return row[1] if row else None
+
+
+def row_at(val, index):
+    """(char index, ref or None, raw entry) of the entry in force at `index`."""
     best = None
-    for idx, ref, _sub in entry_rows(val):
-        if idx <= index:
-            best = ref
-        else:
+    for row in entry_rows(val):
+        if row[0] > index:
             break
+        best = row
     return best
 
 
@@ -111,6 +117,21 @@ def table_kind(val):
     return None
 
 
+def shift_point(i, start, end, delta):
+    """Where character index `i` lands after [start, end) becomes delta longer.
+
+    Points after the edit move by delta; points inside it are clamped so they
+    never land past the replacement's new end. One rule for both table
+    shapes -- the range shifter used to move only points at or after `end`,
+    so a comment ending inside a shrunk edit quoted the text after it.
+    """
+    if i >= end:
+        return i + delta
+    if i > start:
+        return start + min(i - start, end - start + delta)
+    return i
+
+
 def shift_ranges(val, start, end, delta):
     """Shift a table whose entries carry a {start, length} range.
 
@@ -130,8 +151,8 @@ def shift_ranges(val, start, end, delta):
                 a = read_varint(r[1][0], 0)[0] if 1 in r else 0
                 ln = read_varint(r[2][0], 0)[0] if 2 in r else 0
                 b = a + ln
-                na = a + delta if a >= end else a
-                nb = b + delta if b >= end else b
+                na = shift_point(a, start, end, delta)
+                nb = shift_point(b, start, end, delta)
                 if na != a or nb != b:
                     moved += 1
                 parts = [(1, 0, write_varint(na))]
@@ -146,8 +167,115 @@ def shift_ranges(val, start, end, delta):
     return emit(rebuilt), moved
 
 
+def last_per_index(val):
+    """An index-keyed table with only the last entry at each index.
+
+    Replacing the whole of an annotated stretch collapses its run to nothing, and
+    the entries that opened and closed it land on one index. Pages never writes two
+    entries at an index, and the later one is what the run-length rule says applies:
+    a run that starts where another was just closed wins, and a closer after an
+    opener ends a run of zero length. Tables with no duplicates come back untouched.
+    """
+    rows = [(i, sub) for i, _r, sub in entry_rows(val)]
+    if len({i for i, _s in rows}) == len(rows):
+        return val
+    kept = dict(rows)                       # later entries replace earlier ones
+    return emit([(1, 2, kept[i]) for i in sorted(kept)])
+
+
+def scan_index_entries(val):
+    """[(index, entry start, end of the index varint, entry end)] of a plain index table.
+
+    A byte-level walk (entries `0a len 08 <index> ...`) that builds no tokens; `entry_rows`
+    is the general walker. None for anything else -- empty, range-keyed, malformed.
+    """
+    out, pos, n = [], 0, len(val)
+    try:
+        while pos < n:
+            if val[pos] != 0x0A:
+                return None
+            ln, p = read_varint(val, pos + 1)
+            if ln == 0 or p + ln > n or val[p] != 0x08:
+                return None
+            idx, q = read_varint(val, p + 1)
+            if q > p + ln:                       # the index runs past its own entry
+                return None
+            out.append((idx, pos, q, p + ln))
+            pos = p + ln
+    except IndexError:
+        return None
+    return out or None
+
+
+def _reindexed(val, j, after_idx, stop):
+    """One table entry with its index replaced by `j`; the rest of it is copied."""
+    body = b"\x08" + write_varint(j) + val[after_idx:stop]
+    return b"\x0a" + write_varint(len(body)) + body
+
+
+def shift_table_batch(val, edits):
+    """Apply non-overlapping `edits` [(start, end, delta)], ascending, to a plain index
+    table in one pass: -> (bytes, entries moved per edit, ascending), or None.
+
+    Same result as shifting after each edit right to left: an entry moves by the delta of
+    every edit that ends at or before it, and one strictly inside an edit is clamped first
+    (`shift_point`). None when the table is not a plain, ascending index table or two
+    entries collapse onto one index; the one-edit-at-a-time path handles those.
+    """
+    entries = scan_index_entries(val)
+    if entries is None:
+        return None
+    starts, ends, deltas = zip(*edits)
+    prefix = [0]
+    for d in deltas:
+        prefix.append(prefix[-1] + d)
+    per_edit = [0] * len(edits)
+    parts, run, prev, prev_idx = [], 0, -1, -1
+    for idx, pos, after_idx, stop in entries:
+        if idx < prev_idx:
+            return None
+        prev_idx = idx
+        cnt = bisect.bisect_right(ends, idx)         # edits that end at or before idx
+        base = idx
+        if cnt < len(edits) and starts[cnt] < idx:   # strictly inside edit `cnt`: clamp
+            base = shift_point(idx, starts[cnt], ends[cnt], deltas[cnt])
+            if base != idx:
+                per_edit[cnt] += 1
+        j = base + prefix[cnt]
+        if j <= prev:
+            return None
+        prev = j
+        if j != idx:
+            parts += (val[run:pos], _reindexed(val, j, after_idx, stop))
+            run = stop
+    parts.append(val[run:])
+    # every entry at or after an edit's end moves at that step, if the edit changes length
+    indexes = [e[0] for e in entries]
+    for k, d in enumerate(deltas):
+        if d:
+            per_edit[k] += len(indexes) - bisect.bisect_left(indexes, ends[k])
+    return b"".join(parts), per_edit
+
+
 def shift_table(val, start, end, delta):
     """Rewrite the character index of every entry in one attribute table."""
+    fast = shift_table_batch(val, [(start, end, delta)])
+    if fast is None:
+        return _shift_table_slow(val, start, end, delta)
+    return fast[0], fast[1][0]
+
+
+def shift_step(num, val, start, end, delta, length):
+    """One edit's effect on one table: shift it, and keep text typed at the edge of a
+    tracked change out of that change. `length` is the text length after the edit."""
+    val, moved = shift_table(val, start, end, delta)
+    if start == end and num in CHANGE_TABLES and table_kind(val) == "index":
+        val = isolate_insertion(val, start, delta, length)
+    return val, moved
+
+
+def _shift_table_slow(val, start, end, delta):
+    """The general version: any table shape, with the warning for unknown ones."""
     kind = table_kind(val)
     if kind == "range":
         return shift_ranges(val, start, end, delta)
@@ -172,18 +300,13 @@ def shift_table(val, start, end, delta):
         for num, wire, sub in tokenize(entry):
             if num == 1 and wire == 0:
                 i = read_varint(sub, 0)[0]
-                if i >= end:
-                    j = i + delta
-                elif i > start:
-                    j = start + min(i - start, end - start + delta)
-                else:
-                    j = i
+                j = shift_point(i, start, end, delta)
                 if j != i:
                     moved += 1
                 sub = write_varint(j)
             new_inner.append((num, wire, sub))
         rebuilt.append((1, 2, emit(new_inner)))
-    return emit(rebuilt), moved
+    return last_per_index(emit(rebuilt)), moved
 
 
 C_ID = 5                      # editor-only: a comment's own identifier pair
@@ -223,8 +346,13 @@ PARA_END = "\n"
 
 
 def after_paragraph(raw, end):
-    """Where a new paragraph goes when inserted after one ending at `end`."""
-    return min(end + 1, len(raw)) if raw[end:end + 1] == PARA_END else end
+    """Where a new paragraph goes when inserted after one ending at `end`.
+
+    Past its newline, but before a page break, section break or object anchor: those
+    lead what follows, so the new paragraph stays on this one's page and the break
+    ends it instead (see `insert_paragraph`).
+    """
+    return end + 1 if raw[end:end + 1] == PARA_END else end
 
 
 def para_bounds(raw, offset):
@@ -265,12 +393,71 @@ def states_own_style(val, index):
     return any(i == index and ref is not None for i, ref, _s in entry_rows(val))
 
 
-def set_style_at(val, index, style_id):
-    """Force the paragraph-style entry at `index` to `style_id`."""
+def set_entry_at(val, index, entry):
+    """Replace (or add) the raw table entry at `index`, keeping the table sorted."""
     rows = [(i, sub) for i, _r, sub in entry_rows(val) if i != index]
-    rows.append((index, entry_bytes(index, style_id)))
+    rows.append((index, entry))
     rows.sort(key=lambda r: r[0])
     return emit([(1, 2, sub) for _i, sub in rows])
+
+
+def set_style_at(val, index, style_id):
+    """Force the paragraph-style entry at `index` to `style_id`."""
+    return set_entry_at(val, index, entry_bytes(index, style_id))
+
+
+def has_entry_at(val, index):
+    return any(i == index for i, _r, _s in entry_rows(val))
+
+
+def carry_run(val, at, value, bound):
+    """Make `value` the value in force at `at` in a run-length table.
+
+    After deleting [start, end), the text that followed the deletion starts
+    at `start` and should keep the value it had at `end`. Dropping the
+    entries inside the deleted span can remove the terminator of a run that
+    began before it, which used to let that run -- bold, a tracked deletion
+    -- bleed on into the text that followed.
+    """
+    if at >= bound or has_entry_at(val, at) or char_value_at(val, at) == value:
+        return val
+    return set_style_at(val, at, value)
+
+
+def payload_at(val, index):
+    """The fields (bar the index) of the entry in force at `index`, or None.
+
+    For run-length tables whose values are plain numbers, not references --
+    the list-level table -- where char_value_at has no ref to return.
+    """
+    row = row_at(val, index)
+    return emit([t for t in tokenize(row[2]) if t[0] != 1]) if row else None
+
+
+def carry_payload(val, at, payload, bound):
+    """Make `payload` the value in force at `at`, as carry_run does for refs."""
+    if (payload is None or at >= bound or has_entry_at(val, at)
+            or payload_at(val, at) == payload):
+        return val
+    return set_entry_at(val, at, emit([(1, 0, write_varint(at))]) + payload)
+
+
+def isolate_insertion(val, at, length, bound):
+    """Keep `length` characters just inserted at `at` out of the preceding run.
+
+    shift_table moves the entry at `at` forward, so new text takes whatever
+    value was in force just before it. For a run table that would put a new
+    paragraph inside the bold run or the tracked change that precedes it.
+    Close the run at `at` and, when the text after the insertion relied on
+    the same run, re-open it there.
+    """
+    prev = char_value_at(val, at)
+    if prev is None or length <= 0:
+        return val
+    after = at + length
+    if after < bound and not has_entry_at(val, after):
+        val = set_style_at(val, after, prev)
+    return set_style_at(val, at, None)
 
 
 def drop_entries_in(val, start, end):
@@ -299,7 +486,11 @@ def drop_entries_in(val, start, end):
 
 MD_HEADING = re.compile(r"^(#{1,4})\s+(.*)$")
 MD_BULLET = re.compile(r"^\s*[-*]\s+(.*)$")
-MD_EMPH = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|_(.+?)_")
+# Emphasis needs text right inside its markers, and an underscore must stand
+# at a word edge: "my_var_name" and "2 * 3 * 4" are not emphasis.
+MD_EMPH = re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*"
+                     r"|\*(?!\s)(.+?)(?<!\s)\*"
+                     r"|(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)")
 
 
 def strip_markup(text):
@@ -406,20 +597,33 @@ def spans_of(val):
     return out
 
 
+def refuse_overlap(val, start, end):
+    """Refuse an edit at [start, end) that touches the inside of an existing change span.
+
+    A pure insertion (start == end) overlaps when it falls strictly inside one.
+    """
+    for a, b, _r in spans_of(val):
+        if (a < end and start < b) if end > start else a < start < b:
+            sys.exit(
+                f"the text at {start}-{end} overlaps an existing tracked "
+                f"change ({a}-{b}); recording a change across another would "
+                "silently re-attribute or un-mark part of it. Resolve that "
+                "change in Pages first, or edit with --no-track.")
+
+
 def put_span(val, start, end, archive_id):
     """Add a change span, rebuilding the table from its effective spans.
 
     Emitting canonical boundaries rather than editing entries in place keeps
     the table's meaning exactly what `spans_of` says it is, with no dangling
     leftovers to misinterpret later.
+
+    An empty span changes nothing. Writing one anyway left an opener with no
+    closer, and the "change" ran on to whatever entry came next.
     """
-    for a, b, _r in spans_of(val):
-        if a < start and end < b:
-            sys.exit(
-                f"the text at {start}-{end} sits inside an existing tracked "
-                f"change ({a}-{b}); recording a change within a change would "
-                "silently un-mark the rest of it. Resolve that change in "
-                "Pages first, or edit with --no-track.")
+    if end <= start:
+        return val
+    refuse_overlap(val, start, end)
     spans = spans_of(val) + [(start, end, archive_id)]
     marks = {}
     for _a, b, _r in spans:
@@ -430,15 +634,58 @@ def put_span(val, start, end, archive_id):
 
 
 # ------------------------------------------------------------------- document
+class PackageEntries(dict):
+    """The package's files by name: the IWA files up front, the rest (images, previews)
+    when `save` copies them. A package that changed on disk in between is refused."""
+
+    def __init__(self, path, names):
+        super().__init__()
+        self._path, self._names = path, set(names)
+        self.restamp()
+
+    def check_unchanged(self):
+        """Refuse when the package on disk is no longer the one that was loaded."""
+        st = os.stat(self._path)
+        if (st.st_size, st.st_mtime_ns) != self._stamp:
+            sys.exit(f"{self._path} changed on disk after it was loaded; nothing was written. "
+                     "Run the command again.")
+
+    def restamp(self):
+        st = os.stat(self._path)
+        self._stamp = (st.st_size, st.st_mtime_ns)
+
+    def load_rest(self):
+        """Read every file not read yet, in one pass over the zip."""
+        todo = [n for n in self._names if n not in self]
+        if not todo:
+            return
+        self.check_unchanged()
+        with zipfile.ZipFile(self._path) as z:
+            for n in todo:
+                self[n] = z.read(n)
+
+    def __missing__(self, name):
+        if name not in self._names:
+            raise KeyError(name)
+        self.load_rest()
+        return self[name]
+
+
 class Document:
     def __init__(self, path):
         self.path = path
-        with zipfile.ZipFile(path) as z:
-            self.names = z.namelist()
-            self.entries = {n: z.read(n) for n in self.names}
-            self.compress = {i.filename: i.compress_type for i in z.infolist()}
-        body_payload = iwa_decode(self.entries[BODY_ENTRY])
-        self.arcs = archives(body_payload)
+        with package_errors(path):
+            with zipfile.ZipFile(path) as z:
+                self.names = z.namelist()
+                self.entries = PackageEntries(path, self.names)
+                for n in self.names:
+                    if n.endswith(".iwa"):
+                        self.entries[n] = z.read(n)
+                self.compress = {i.filename: i.compress_type for i in z.infolist()}
+            if BODY_ENTRY not in self.names:
+                sys.exit(f"{os.path.basename(path)}: no {BODY_ENTRY}; not a Pages document")
+            body_payload = iwa_decode(self.entries[BODY_ENTRY])
+            self.arcs = archives(body_payload)
         self.by_id = {}
         for ai, (info, msgs) in enumerate(self.arcs):
             ident = next((read_varint(v, 0)[0]
@@ -450,8 +697,7 @@ class Document:
                 if mtype in (T_STORAGE, T_ATTACHMENT, T_COMMENT,
                              T_COMMENT_REF, T_CHANGE):
                     self.by_id[ident] = (ai, mi, mtype)   # prefer what we use
-        self.slot = self._find_body()
-        # "body" plus one handle per margin note, in reading order. Notes live
+        # "body" plus one handle per note (footnote or margin note), in reading order. Notes live
         # in their own storages with their own offset spaces, which is why a
         # body-only editor cannot reach them.
         # One enumeration, shared with the reader, so a handle means the same
@@ -465,6 +711,11 @@ class Document:
         import pages2md
         reader = pages2md.PagesDoc(path)
         self.reader = reader              # reused by callers that need style/list lookups
+        # the reader decides which storage is the body; the editor only finds it again
+        body_id = reader._body_id()
+        if body_id not in self.by_id:
+            sys.exit(f"{path}: the body text is not in {BODY_ENTRY}; not supported")
+        self.slot = self.by_id[body_id][:2]
         self.slots, self.anchors = {}, {}
         for handle, sid, anchor, kind in reader.storages():
             if kind == "toc" or sid is None or sid not in self.by_id:
@@ -480,20 +731,7 @@ class Document:
         # body's maximum, and reusing one produces a duplicate-id document.
         # `reader.arcs` already spans every .iwa file's archives, keyed by id.
         self.next_id = 1 + max(reader.arcs, default=0)
-
-    def _find_body(self):
-        """(archive index, message index) of the largest text storage."""
-        best, size = None, -1
-        for ai, (_info, msgs) in enumerate(self.arcs):
-            for mi, (mtype, msg) in enumerate(msgs):
-                if mtype != T_STORAGE:
-                    continue
-                n = sum(len(v) for num, _w, v in tokenize(msg) if num == F_TEXT)
-                if n > size:
-                    best, size = (ai, mi), n
-        if best is None:
-            sys.exit(f"{self.path}: no text storage found")
-        return best
+        self._flow_cache = None             # (message bytes, flow view, footnote marks)
 
     def select(self, handle):
         """Point the text and edit methods at one storage."""
@@ -579,7 +817,9 @@ class Document:
 
         Taken from an existing comment rather than looked up: the author
         archive lives in AnnotationAuthorStorage.iwa, which this class never
-        loads -- but the id it references is all a new comment needs.
+        loads -- but the id it references is all a new comment needs. A document
+        whose comments were all deleted still has its author archive: with no comment to
+        copy from, the first one of those is used.
         """
         for ident, (ai, mi, t) in self.by_id.items():
             if t != T_COMMENT:
@@ -587,8 +827,11 @@ class Document:
             c = parse_fields_of(self.arcs[ai][1][mi][1])
             if C_AUTHOR in c:
                 return ref_of(c[C_AUTHOR][0])
-        sys.exit("this document has no comment to take an author from; "
-                 "add one in Pages first")
+        for ident, (mtype, _msg, _src) in self.reader.arcs.items():
+            if mtype == T_AUTHOR:
+                return ident
+        sys.exit("this document has no comment and no annotation author to attribute "
+                 "one to; add a comment in Pages first")
 
     def comment_field(self):
         """Which field holds this storage's comments, and how it is keyed.
@@ -653,21 +896,13 @@ class Document:
             marks.setdefault(0, None)       # a run-length table must start at 0
             table = emit([(1, 2, entry_bytes(i, marks[i]))
                           for i in sorted(marks)])
-        rebuilt, seen = [], False
-        for num, wire, val in tokenize(self._msg):
-            if num == field:
-                val, seen = table, True
-            rebuilt.append((num, wire, val))
-        if not seen:
-            at = next((i for i, (n2, _w, _v) in enumerate(rebuilt)
-                       if n2 > field), len(rebuilt))
-            rebuilt.insert(at, (field, 2, table))
-        self._msg = emit(rebuilt)
+        self._put_field(field, table)
 
     def thread_ids(self, head):
         """Every comment archive in one thread, head first."""
         out, ident = [], head
-        while ident and self.by_id.get(ident, (None, None, None))[2] == T_COMMENT:
+        while (ident and ident not in out
+               and self.by_id.get(ident, (None, None, None))[2] == T_COMMENT):
             out.append(ident)
             c = parse_fields_of(self.arcs[self.by_id[ident][0]][1]
                                 [self.by_id[ident][1]][1])
@@ -689,7 +924,7 @@ class Document:
                     raw = self.text()[0]
                     sys.exit(
                         f"that text overlaps an existing comment on "
-                        f"{raw[a:a + n].strip()!r} in this text box. A text "
+                        f"{show(raw[a:a + n]).strip()!r} in this text box. A text "
                         "box keys comments by character run, so two "
                         "overlapping ones cannot both be stored. Pick text "
                         "outside it.")
@@ -743,24 +978,51 @@ class Document:
                                 if r[2] != ref_id])
 
     def format_run(self, start, end, bold=False, italic=False):
-        """Apply bold/italic across [start, end) of the selected storage."""
+        """Apply bold/italic across [start, end) of the selected storage.
+
+        Neither bold nor italic means plain: a null entry, "no override from
+        here", which hands the text back to its paragraph style. No
+        character style is needed for that -- looking one up for
+        (False, False) never found anything.
+
+        The range becomes one run: entries inside it are dropped, or an
+        italic word in the middle would win back its own span.
+        """
         if end <= start:
             return 0
-        want = char_style_ids(self.path).get((bold, italic))
-        if want is None:
-            sys.exit(f"this document has no plain {'bold' if bold else ''}"
-                     f"{'/' if bold and italic else ''}"
-                     f"{'italic' if italic else ''} character style to reuse; "
-                     "apply it once in Pages and try again")
-        rebuilt = []
-        for num, wire, val in tokenize(self._msg):
-            if num == F_CHAR_TBL:
-                after = char_value_at(val, end)     # read before changing
-                val = set_style_at(val, start, want)
-                val = set_style_at(val, end, after)
-            rebuilt.append((num, wire, val))
-        self._msg = emit(rebuilt)
+        want = None
+        if bold or italic:
+            # the reader parsed the stylesheet once already; re-reading the
+            # file here cost a full parse per emphasis run during import
+            want = char_style_ids(self.reader).get((bold, italic))
+            if want is None:
+                name = "/".join(k for k, on in (("bold", bold),
+                                                ("italic", italic)) if on)
+                sys.exit(f"this document has no plain {name} character style "
+                         "to reuse; apply it once in Pages and try again")
+        val = parse_fields_of(self._msg).get(F_CHAR_TBL, [None])[0]
+        after = char_value_at(val, end)             # read before changing
+        new_table = val is None
+        val = set_style_at(drop_entries_in(val, start, end + 1), start, want)
+        if end < len(self.text()[0]):
+            val = set_style_at(val, end, after)
+        if new_table and start > 0:
+            val = set_style_at(val, 0, None)        # a new table starts at 0
+        self._put_field(F_CHAR_TBL, val)
         return 1
+
+    def _put_field(self, field, value):
+        """Replace a field of the selected storage, or add it in field order."""
+        rebuilt, seen = [], False
+        for num, wire, val in tokenize(self._msg):
+            if num == field:
+                val, seen = value, True
+            rebuilt.append((num, wire, val))
+        if not seen:
+            at = next((i for i, (n2, _w, _v) in enumerate(rebuilt)
+                       if n2 > field), len(rebuilt))
+            rebuilt.insert(at, (field, 2, value))
+        self._msg = emit(rebuilt)
 
     @staticmethod
     def _restate_following(val, write_at, keep, bound):
@@ -786,7 +1048,7 @@ class Document:
         """
         self._require_single_chunk()
         raw = self.text()[0]
-        start, _end = para_bounds(raw, offset)
+        start, _end = self.paragraph_bounds(offset, raw)
         after = min(_end + 1, len(raw))
         rebuilt = []
         for num, wire, val in tokenize(self._msg):
@@ -802,11 +1064,54 @@ class Document:
         self._msg = emit(rebuilt)
         return start
 
+    def flow(self, raw=None):
+        """The selected storage's text with footnote references neutralised.
+
+        Paragraph boundaries are found on this view (see pages2md.flow_view);
+        the real text is still what gets edited. Kept until the storage's
+        message changes, which every edit does (callers that already hold the
+        text can pass it as `raw` and skip decoding it again).
+        """
+        return self._flow_and_marks(raw)[0]
+
+    def footnote_marks(self, raw=None):
+        """Offsets of the footnote references in the selected storage (cached with `flow`)."""
+        return self._flow_and_marks(raw)[1]
+
+    def _flow_and_marks(self, raw=None):
+        msg = self._msg
+        if not (self._flow_cache and self._flow_cache[0] is msg):
+            raw = self.text()[0] if raw is None else raw
+            val = parse_fields_of(msg).get(F_ATTACHMENTS, [None])[0]
+            marks = footnote_marks([(i, ref) for i, ref, _s in entry_rows(val)], raw)
+            self._flow_cache = (msg, flow_view(raw, marks), marks)
+        return self._flow_cache[1:]
+
+    def footnote_refs(self, lo, hi):
+        """Offsets of footnote references inside [lo, hi) of the selected storage."""
+        return sorted(i for i in self.footnote_marks() if lo <= i < hi)
+
+    def require_no_footnotes(self, lo, hi, what):
+        """Refuse to remove text that holds a footnote reference.
+
+        The note's own storage and its archives would stay behind unreferenced, and
+        nobody has opened such a document in Pages to see whether it copes.
+        """
+        refs = self.footnote_refs(lo, hi)
+        if refs:
+            sys.exit(f"cannot {what}: it holds {len(refs)} footnote reference(s) (at "
+                     f"{', '.join('@' + str(i) for i in refs[:3])}). Removing one would "
+                     "leave its note behind in the file. Delete the footnote in Pages "
+                     "first, or edit around it.")
+
+    def paragraph_bounds(self, offset, raw=None):
+        """(start, end) of the paragraph containing `offset`."""
+        return para_bounds(self.flow(raw), offset)
+
     def paragraph_starts(self, lo, hi):
         """Offsets of every paragraph beginning inside [lo, hi)."""
-        raw = self.text()[0]
         out, pos = [], 0
-        for chunk in PARA_SPLIT.split(raw):
+        for chunk in PARA_SPLIT.split(self.flow()):
             if lo <= pos < hi:
                 out.append(pos)
             pos += len(chunk) + 1
@@ -821,18 +1126,27 @@ class Document:
         """
         removed = 0
         for start in reversed(self.paragraph_starts(lo, hi)):
-            self.delete_paragraph(start)
-            removed += 1
+            if self.delete_paragraph(start)[1]:
+                removed += 1
         return removed
 
     def insert_paragraph(self, at, text, style_id=None, list_id=None):
         """Insert a whole paragraph starting at `at` (a paragraph boundary)."""
         self._require_single_chunk()
         raw = self.text()[0]
+        text = u16(text)
         # at the very end there may be no terminator to insert after, so the
         # new text would run on into the last paragraph
-        lead = "" if (at == 0 or raw[at - 1:at] in (PARA_END, "")) else PARA_END
-        body = lead + text + PARA_END
+        # `at` follows a paragraph separator -- a newline or any break character, but not a
+        # footnote reference, which sits inside a sentence -- so no newline is needed
+        # before the new text; with one added, the break character started an empty
+        # paragraph of its own
+        flow = self.flow(raw)
+        lead = "" if (at == 0 or flow[at - 1] in PARA_BREAKS) else PARA_END
+        # before a page break, section break or anchor the break itself ends the new
+        # paragraph; a newline as well would leave an empty paragraph in front of it
+        tail = "" if flow[at:at + 1] in ("\x04", "\x05", "\x0e") else PARA_END
+        body = lead + text + tail
         delta = len(body)
         rebuilt = []
         for num, wire, val in tokenize(self._msg):
@@ -852,6 +1166,9 @@ class Document:
                     # what was in force before the insertion
                     val = self._restate_following(val, at + delta, keep,
                                                   len(raw) + delta)
+                elif num in RUN_TABLES and table_kind(val) == "index":
+                    # a new paragraph starts plain and outside any change
+                    val = isolate_insertion(val, at, delta, len(raw) + delta)
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
         self._write_text(raw[:at] + body + raw[at:])
@@ -861,24 +1178,50 @@ class Document:
         """Remove the paragraph containing `offset`, newline included."""
         self._require_single_chunk()
         raw = self.text()[0]
-        start, end = para_bounds(raw, offset)
+        start, end = self.paragraph_bounds(offset, raw)
+        cut = start
         if raw[end:end + 1] == PARA_END:    # its own terminator, not the
             end += 1                        # next paragraph's leading break
-        delta = -(end - start)
+        elif (start > 0 and raw[start - 1] == PARA_END
+              and (end == len(raw) or self.flow(raw)[end] in PARA_BREAKS)):
+            # Nothing terminates it: it is last, or a page break / anchor ends
+            # it. The previous paragraph's newline would be left in front of an
+            # empty paragraph, so it goes instead.
+            cut = start - 1
+        self.require_no_footnotes(start, end, "delete this paragraph")
+        if end == start:
+            # The empty slot PARA_SPLIT yields just before a page break or
+            # anchor: nothing to delete. Carrying on would still write a
+            # style entry onto the break character itself.
+            return start, 0
+        delta = -(end - cut)
+        bound = len(raw) + delta
         rebuilt = []
         for num, wire, val in tokenize(self._msg):
             if num != F_TEXT and wire == 2:
                 # the next paragraph may inherit from the one being removed,
-                # so pin it to what it resolves to today
-                keep = (effective_style_at(val, end)
-                        if num == F_PARA_TBL else None)
+                # so pin it to what it resolves to today -- its list style as
+                # much as its paragraph style
+                styled = num in (F_PARA_TBL, F_LIST_TBL)
+                keep = effective_style_at(val, end) if styled else None
+                indexed = table_kind(val) == "index"
+                run = indexed and num in RUN_TABLES
+                carry = char_value_at(val, end) if run else None
+                # list levels are run-length too, holding numbers not refs
+                leveled = indexed and num == F_LEVELS
+                carry_level = payload_at(val, end) if leveled else None
                 val = drop_entries_in(val, start, end)
-                val, _n = shift_table(val, start, end, delta)
-                val = self._restate_following(val, start, keep, len(raw))
+                val, _n = shift_table(val, cut, end, delta)
+                if styled:
+                    val = self._restate_following(val, cut, keep, bound)
+                elif run:
+                    val = carry_run(val, cut, carry, bound)
+                elif leveled:
+                    val = carry_payload(val, cut, carry_level, bound)
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
-        self._write_text(raw[:start] + raw[end:])
-        return start, delta
+        self._write_text(raw[:cut] + raw[end:])
+        return cut, delta
 
     def new_change(self, kind):
         """Clone a change archive with a fresh id, timestamp and UUID."""
@@ -909,8 +1252,15 @@ class Document:
         return ident
 
     def text(self):
+        """(UTF-16 view of the selected storage's text, chunk count).
+
+        The view's indices are the attribute tables' indices, so every
+        offset below is in Pages' own units. Anything typed by the user goes
+        through u16() before it meets this text, and anything shown goes
+        through show().
+        """
         chunks = [v for num, _w, v in tokenize(self._msg) if num == F_TEXT]
-        return b"".join(chunks).decode("utf-8"), len(chunks)
+        return u16(b"".join(chunks).decode("utf-8")), len(chunks)
 
     def deletions(self):
         """Tracked-change deletion spans, so we can show the accepted view."""
@@ -941,14 +1291,61 @@ class Document:
 
     # -- editing ---------------------------------------------------------
     def apply(self, edits):
-        """Apply [(raw_start, raw_end, new_text)]; returns a report."""
+        """Apply [(raw_start, raw_end, new_text)]; returns a report.
+
+        Edits that do not overlap are applied in one pass per table: each entry moves by
+        the sum of the deltas of the edits before it (found with a bisect), instead of
+        every table being rewritten after every edit. Anything else -- overlapping edits,
+        a table that is not a plain index table, the change tables whose entries need
+        `isolate_insertion` after each edit -- takes the one-at-a-time path, which gives
+        the same bytes (tests/test_shift_fast.py).
+        """
         raw, chunks = self.text()
         if chunks != 1:
             sys.exit(f"{self.path}: body text is split across {chunks} chunks; "
                      "not supported")
+        if len(edits) < 2:
+            return self._apply_sequential(edits)
+        descending = [minimal_edit(raw, s, e, n) for s, e, n in sorted(edits, reverse=True)]
+        ascending = descending[::-1]
+        if any(a[1] > b[0] for a, b in zip(ascending, ascending[1:])):
+            return self._apply_sequential(edits)
+        deltas = [len(n) - (e - s) for s, e, n in descending]
+        lengths, size = [], len(raw)          # text length after each step, right to left
+        for d in deltas:
+            size += d
+            lengths.append(size)
+        moved = [0] * len(descending)
+        rebuilt = []
+        for num, wire, val in tokenize(self._msg):
+            if num == F_TEXT or wire != 2:
+                rebuilt.append((num, wire, val))
+                continue
+            batch = None if num in CHANGE_TABLES else shift_table_batch(
+                val, [(s, e, d) for (s, e, _n), d in zip(ascending, deltas[::-1])])
+            if batch is not None:
+                val, per_edit = batch
+                for k, n in enumerate(per_edit[::-1]):      # per_edit is ascending
+                    moved[k] += n
+            else:
+                for k, (start, end, _new) in enumerate(descending):
+                    val, n = shift_step(num, val, start, end, deltas[k], lengths[k])
+                    moved[k] += n
+            rebuilt.append((num, wire, val))
+        self._msg = emit(rebuilt)
+        for start, end, new in descending:
+            raw = raw[:start] + new + raw[end:]
+        self._write_text(raw)
+        return [(s, e, n, deltas[k], moved[k]) for k, (s, e, n) in enumerate(descending)]
+
+    def _apply_sequential(self, edits):
+        """One edit at a time, every table rewritten after each: simple, and the reference
+        `apply` is tested against."""
+        raw = self.text()[0]
         report = []
         # right-to-left so earlier offsets stay valid
         for start, end, new in sorted(edits, reverse=True):
+            start, end, new = minimal_edit(raw, start, end, new)
             delta = len(new) - (end - start)
             raw = raw[:start] + new + raw[end:]
             moved = 0
@@ -957,7 +1354,7 @@ class Document:
                 if num in (F_TEXT,) or wire != 2:
                     rebuilt.append((num, wire, val))
                     continue
-                val, n = shift_table(val, start, end, delta)
+                val, n = shift_step(num, val, start, end, delta, len(raw))
                 moved += n
                 rebuilt.append((num, wire, val))
             self._msg = emit(rebuilt)
@@ -979,8 +1376,18 @@ class Document:
         report = []
         for start, end, new in sorted(edits, reverse=True):
             delta = len(new)
-            del_id = self.new_change(2)
-            ins_id = self.new_change(1)
+            # inside someone else's pending change, shifting would split that change
+            # around this one before put_span could see the overlap
+            fields = parse_fields_of(self._msg)
+            for num in CHANGE_TABLES:
+                if num in fields and table_kind(fields[num][0]) == "index":
+                    refuse_overlap(fields[num][0], start, end)
+                    refuse_overlap(fields[num][0], end, end)
+            # a pure deletion inserts nothing and a pure insertion deletes
+            # nothing; minting a change for the empty side produced an
+            # unterminated span that marked unrelated text
+            del_id = self.new_change(2) if end > start else None
+            ins_id = self.new_change(1) if delta else None
             moved = 0
             rebuilt = []
             seen = set()
@@ -990,6 +1397,10 @@ class Document:
                     continue
                 val, n = shift_table(val, end, end, delta)   # pure insertion
                 moved += n
+                if num in CHANGE_TABLES and table_kind(val) == "index":
+                    # the new text belongs to this edit's insertion only, not
+                    # to a change that happens to end where it goes
+                    val = isolate_insertion(val, end, delta, len(raw) + delta)
                 if num == F_DELETIONS:
                     val = put_span(val, start, end, del_id)
                     seen.add(num)
@@ -999,12 +1410,12 @@ class Document:
                 rebuilt.append((num, wire, val))
 
             # A storage that has never carried a change of this kind has no
-            # table for it -- margin notes typically lack the deletions field.
+            # table for it -- notes typically lack the deletions field.
             # Without this, the replacement text is inserted but the original
             # is never marked deleted, so both end up visible.
             for num, span in ((F_DELETIONS, (start, end, del_id)),
                               (F_INSERTIONS, (end, end + delta, ins_id))):
-                if num in seen:
+                if num in seen or span[2] is None:
                     continue
                 token = (num, 2, put_span(None, *span))
                 at = next((i for i, (n2, _w, _v) in enumerate(rebuilt)
@@ -1026,26 +1437,53 @@ class Document:
         rebuilt, done = [], False
         for num, wire, val in tokenize(self._msg):
             if num == F_TEXT and not done:
-                val, done = raw.encode("utf-8"), True
+                # strict: a half-pair here means an edit split an emoji
+                val, done = from_u16(raw).encode("utf-8"), True
             rebuilt.append((num, wire, val))
         self._msg = emit(rebuilt)
 
     def save(self, out_path):
+        """Write the package -- but only if what was written reads back well-formed.
+
+        The new file is checked with both tools before it replaces anything: a
+        write that produced an ill-formed table once left a document that
+        pages2md could not open, while the editor's own re-read said "OK".
+        """
+        self.entries.check_unchanged()
+        self.entries.load_rest()
         payload = pack_archives(self.arcs)
         self.entries[BODY_ENTRY] = iwa_encode(payload)
         tmp = out_path + ".tmp"
-        with zipfile.ZipFile(tmp, "w") as z:
-            for n in self.names:          # preserve order and storage method
-                z.writestr(n, self.entries[n],
-                           compress_type=self.compress.get(n, zipfile.ZIP_STORED))
+        try:
+            with zipfile.ZipFile(tmp, "w") as z:
+                for n in self.names:      # preserve order and storage method
+                    z.writestr(n, self.entries[n],
+                               compress_type=self.compress.get(n, zipfile.ZIP_STORED))
+        except BaseException:
+            if os.path.exists(tmp):
+                os.remove(tmp)            # never leave a half-written package behind
+            raise
+        problems, check = written_problems(tmp)
+        if problems:
+            os.remove(tmp)
+            sys.exit(f"refusing to write {out_path}: the result would be an ill-formed "
+                     f"document ({'; '.join(problems[:4])}). Nothing was changed. "
+                     "This is a bug in pages_edit; the edit that caused it is worth "
+                     "reporting.")
         os.replace(tmp, out_path)
+        if os.path.abspath(out_path) == os.path.abspath(self.path):
+            self.entries.restamp()        # what is on disk is what this object holds
+        check.path = check.reader.path = check.entries._path = out_path
+        check.entries.restamp()
+        return check                      # the written file, already read back and checked
 
 
 # Structure and pagination are reading concerns, so they live in pages2md.
 from pages2md import (outline, section_range, index_path, load_index,
+                      text_fingerprint,
                       build_index, page_of, page_range, pages_has_open,
-                      fingerprint_parts, style_ids, list_style_ids,
-                      char_style_ids,
+                      style_ids, list_style_ids,
+                      char_style_ids, package_errors, T_AUTHOR,
                       # one definition of the reverse-engineered field numbers:
                       # two tables that must agree is the worst failure mode
                       # this codebase has (reads fine, writes corrupt)
@@ -1053,8 +1491,83 @@ from pages2md import (outline, section_range, index_path, load_index,
                       F_TEXT, F_PARA_TBL, F_LIST_TBL, F_COMMENTS,
                       F_INSERTIONS, F_DELETIONS, F_COMMENTS_RUN,
                       C_TEXT, C_DATE, C_AUTHOR, C_NEXT, APPLE_EPOCH,
-                      PARA_BREAKS, PARA_SPLIT)
+                      PARA_BREAKS, PARA_SPLIT, F_ATTACHMENTS, footnote_marks,
+                      F_LEVELS,
+                      flow_view, FOOTNOTE_MARK,
+                      # text is handled as a UTF-16 view; see pages2md
+                      u16, from_u16, show)
 from pages2md import _ref as ref_of   # skip a TSP.Reference's tag byte, read the varint
+
+# Run-length tables of references where a null entry means "no value from
+# here": the run in force is exactly what the entries say, so a structural
+# edit has to carry it explicitly. Paragraph and list styles are the other
+# kind (null = "no change") and get _restate_following instead.
+# Comments join them when a storage keys them run-length (field 23), which
+# Pages 15.4 does for the body too, not only for text boxes.
+RUN_TABLES = (F_CHAR_TBL, F_INSERTIONS, F_DELETIONS, F_COMMENTS_RUN)
+CHANGE_TABLES = (F_INSERTIONS, F_DELETIONS)
+
+
+# ------------------------------------------------------ well-formedness
+def table_problems(doc):
+    """Ways an attribute table in any storage can be ill-formed, as readable strings.
+
+    Every index-keyed table must be sorted, hold one entry per index, and stay inside
+    the text (an index equal to the length is fine); a range table must end inside it.
+    Pages writes nothing else -- the real samples are clean -- so anything else came
+    from an edit. The selected storage is left as it was.
+    """
+    selected, out = doc.slot, []
+    for handle in doc.slots:
+        doc.select(handle)
+        length = len(doc.text()[0])
+        for num, wire, val in tokenize(doc._msg):
+            if num == F_TEXT or wire != 2:
+                continue
+            kind = table_kind(val)
+            if kind == "index":
+                scanned = scan_index_entries(val)
+                if scanned is not None:
+                    idx = [e[0] for e in scanned]
+                else:
+                    idx = []
+                    for n, w, sub in tokenize(val):      # file order, not sorted order
+                        fields = parse_fields_of(sub) if (n, w) == (1, 2) else {}
+                        if 1 in fields:
+                            idx.append(read_varint(fields[1][0], 0)[0])
+                where = f"{handle} field {num}"
+                if idx != sorted(idx):
+                    out.append(f"{where}: unsorted entries {idx[:6]}")
+                dup = sorted(i for i, c in Counter(idx).items() if c > 1)
+                if dup:
+                    out.append(f"{where}: duplicate index {dup[:4]}")
+                if idx and max(idx) > length:
+                    out.append(f"{where}: index {max(idx)} past the end of the text ({length})")
+            elif kind == "range":
+                for sub in parse_fields_of(val).get(1, []):
+                    span = parse_fields_of(parse_fields_of(sub)[1][0])
+                    a = read_varint(span[1][0], 0)[0] if 1 in span else 0
+                    n_ = read_varint(span[2][0], 0)[0] if 2 in span else 0
+                    if a + n_ > length:
+                        out.append(f"{handle} field {num}: range {a}+{n_} past the end "
+                                   f"of the text ({length})")
+    doc.slot = selected
+    return out
+
+
+def written_problems(path):
+    """(everything wrong with a document we just wrote, the Document read back or None).
+
+    Read back with both tools; the caller reuses the Document rather than parsing the
+    same file again.
+    """
+    try:
+        check = Document(path)
+        problems = table_problems(check)
+        check.reader.all_paragraphs()           # the reader must manage it too
+    except (Exception, SystemExit) as exc:      # package_errors reports through sys.exit
+        return [f"cannot read it back: {exc}"], None
+    return problems, check
 
 
 # ------------------------------------------------------ fingerprint and plans
@@ -1062,14 +1575,10 @@ def fingerprint(doc):
     """Short hash of the body text.
 
     Of the text rather than the file, because Pages rewrites the whole package
-    on every save: the zip bytes change when nothing you care about did.
+    on every save: the zip bytes change when nothing you care about did. The
+    definition lives in pages2md so the reader's page index and this agree.
     """
-    parts = []
-    for handle in doc.slots:                 # body first, then notes by anchor
-        doc.select(handle)
-        parts.append(doc.text()[0])
-    doc.select("body")
-    return fingerprint_parts(parts)
+    return text_fingerprint(doc.reader)
 
 
 def scope_from(path, in_section, page, text_len):
@@ -1130,6 +1639,9 @@ def resolve_plan(doc, path, entries):
         for required in ("find", "replace"):
             if required not in entry:
                 sys.exit(f"edit {n}: missing `{required}`")
+            if not isinstance(entry[required], str):
+                sys.exit(f"edit {n}: `{required}` must be a string, not "
+                         f"{type(entry[required]).__name__}")
         scope, where = scope_from(path, entry.get("in"), entry.get("page"),
                                   text_len)
         which = None if entry.get("all") else (entry.get("occurrence") or 1)
@@ -1164,8 +1676,8 @@ def describe_plan(resolved, expected, actual, path):
         for handle, eds in gs:
             for rs, _re, new, old in eds:
                 tag = "" if handle == "body" else f" [{handle}]"
-                print(f"   @{rs:<6}{tag} {old!r}")
-                print(f"   {'':7} -> {new!r}")
+                print(f"   @{rs:<6}{tag} {show(old)!r}")
+                print(f"   {'':7} -> {show(new)!r}")
     return total
 
 
@@ -1192,9 +1704,22 @@ def vcs_root(doc):
     return os.path.join(os.path.dirname(os.path.abspath(doc)) or ".", VCS_DIR)
 
 
-def git(root, *args, check=True):
-    return subprocess.run(["git", "-C", root, *args], check=check,
-                          capture_output=True, text=True)
+def git(root, *args, check=True, text=True):
+    """Run git in the history repo; exit with a message if it is missing or fails.
+
+    Signing is switched off for this repo's commits: the history is a safety net, and a
+    `commit.gpgsign=true` in the user's own config (with a key that is locked or absent)
+    would make every write fail.
+    """
+    cmd = ["git", "-C", root, "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args]
+    try:
+        return subprocess.run(cmd, check=check, capture_output=True, text=text)
+    except FileNotFoundError:
+        sys.exit("git is not installed (or not on PATH); the document history and "
+                 "`config --vcs on` need it. Nothing was changed.")
+    except subprocess.CalledProcessError as exc:
+        err = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
+        sys.exit(f"`git {' '.join(args)}` failed: {err.strip() or exc}. Nothing further was changed.")
 
 
 def vcs_init(doc):
@@ -1225,6 +1750,19 @@ def vcs_snapshot(doc, message):
 
 
 # ---------------------------------------------------------------- commands
+def require_search_text(pattern, tag=""):
+    """Refuse an empty search text, wherever one is taken.
+
+    It matches at every character, so a replacement would be written between all of
+    them (`replace -f "" -r X --all` turned "Titel" into "XTXiXtXeXlX"). A zero-width
+    *pattern* that means something -- `^`, `$`, `\\b` -- is not empty text and works.
+    """
+    if not pattern:
+        sys.exit(f"{tag}empty search text matches at every character, so it would change "
+                 "every position. Give the text to look for; to act at the start or end of a "
+                 "paragraph use a zero-width pattern such as ^ or $ with --regex.")
+
+
 def matches(doc, pattern, use_raw, regex, scope, anchor=None):
     """Raw matches in the currently selected storage.
 
@@ -1232,24 +1770,39 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
     later, by check_edits, so that an unrelated match cannot block the one you
     actually asked for.
     """
+    require_search_text(pattern)
     if use_raw:
         hay, keep = doc.text()[0], None
     else:
         hay, keep = doc.accepted_map()
     # MULTILINE so ^ and $ anchor to paragraphs, which is what a caller means
-    rx = re.compile(pattern if regex else re.escape(pattern), re.MULTILINE)
-    out = []
-    for h in rx.finditer(hay.translate(SEARCH_VIEW)):
+    pattern = u16(pattern)
+    try:
+        rx = re.compile(pattern if regex else re.escape(pattern), re.MULTILINE)
+    except re.error as exc:
+        sys.exit(f"invalid regular expression {show(pattern)!r}: {exc}")
+    raw = doc.text()[0]
+    out, raw_len = [], len(raw)
+    view = hay.translate(SEARCH_VIEW)
+    marks = doc.footnote_marks(raw)
+    if marks:
+        # a footnote reference sits inside a sentence: it is not a line break to ^ and $
+        at = marks if keep is None else [k for k, r in enumerate(keep) if r in marks]
+        chars = list(view)
+        for k in at:
+            chars[k] = FOOTNOTE_MARK
+        view = "".join(chars)
+    for h in rx.finditer(view):
         s, e = h.start(), h.end()
         if keep is None:
             rs, re_ = s, e
         elif e == s:                       # zero-width: an insertion point
-            rs = re_ = keep[s] if s < len(keep) else len(hay)
+            rs = re_ = keep[s] if s < len(keep) else raw_len
         else:
             rs, re_ = keep[s], keep[e - 1] + 1
         if scope:
             lo, hi = scope
-            # A margin note is in scope when its anchor is: its own offsets
+            # A note is in scope when its anchor is: its own offsets
             # live in a different space from the body's.
             inside = (lo <= anchor < hi) if anchor is not None else (
                 rs >= lo and re_ <= hi)
@@ -1259,23 +1812,65 @@ def matches(doc, pattern, use_raw, regex, scope, anchor=None):
     return out
 
 
-def check_edits(doc, selected, replacement, regex, label=None):
+def check_edits(doc, selected, replacement, regex, label=None, anchor_only=False):
     """Turn selected matches into edits, refusing the unsafe ones."""
     tag = f"{label}: " if label else ""
     raw = doc.text()[0]
     edits = []
+    if replacement is not None:
+        replacement = u16(replacement)
     for rs, re_, acc, span, old, h in selected:
-        new = (h.expand(replacement) if regex and replacement is not None
-               else replacement)
+        try:
+            new = (h.expand(replacement) if regex and replacement is not None
+                   else replacement)
+        except (re.error, IndexError) as exc:
+            sys.exit(f"{tag}invalid replacement {show(replacement)!r} for this pattern: {exc}")
+        if splits_pair(raw, rs) or splits_pair(raw, re_):
+            sys.exit(f"{tag}match at offset {rs} starts or ends inside an "
+                     "emoji or other character outside the BMP; widen it to "
+                     "the whole character")
         if re_ - rs != span:
             sys.exit(f"{tag}match at accepted offset {acc} spans a tracked "
                      "deletion; resolve that edit in Pages first, or use --raw")
         if any(c in raw[rs:re_] for c in BREAKS):
+            what = ("this tool does not anchor a comment across one"
+                    if anchor_only else "replacing it would delete that character")
             sys.exit(f"{tag}match at offset {rs} contains a page break, object "
-                     "anchor or manual line break; replacing it would delete "
-                     "that character. Narrow the match to one side of it.")
+                     f"anchor or manual line break; {what}. Narrow the match to "
+                     "one side of it.")
         edits.append((rs, re_, new, old))
     return edits
+
+
+def splits_pair(view, i):
+    """True if offset `i` falls between the two halves of a surrogate pair."""
+    return ("\udc00" <= view[i:i + 1] <= "\udfff"
+            and "\ud800" <= view[i - 1:i] <= "\udbff")
+
+
+def minimal_edit(raw, start, end, new):
+    """Shrink a replacement to the part that actually changes.
+
+    Text shared at both ends of old and new is left alone, so formatting
+    that starts or ends inside it stays on the same characters. Replacing
+    "xx Bold" with "x Bold" otherwise clamps the bold run's start to a
+    position inside the replacement and bolds "old" instead of "Bold".
+    Never trims to a boundary inside a surrogate pair: two emoji can share
+    their first half.
+    """
+    old = raw[start:end]
+    room = min(len(old), len(new))
+    p = 0
+    while p < room and old[p] == new[p]:
+        p += 1
+    if p and "\ud800" <= old[p - 1] <= "\udbff":
+        p -= 1
+    q = 0
+    while q < room - p and old[-1 - q] == new[-1 - q]:
+        q += 1
+    if q and "\udc00" <= old[len(old) - q] <= "\udfff":
+        q -= 1
+    return start + p, end - q, new[p:len(new) - q]
 
 
 def search(doc, pattern, use_raw, regex, scope, handles):
@@ -1307,19 +1902,20 @@ def handles_for(doc, where):
 
 
 def resolve(doc, pattern, replacement, which, use_raw, regex, scope=None,
-            label=None, where="all"):
+            label=None, where="all", anchor_only=False):
     """Locate matches across storages and map them onto raw offsets.
 
     -> [(handle, [(raw_start, raw_end, new, old), ...]), ...]
     """
     tag = f"{label}: " if label else ""
+    require_search_text(pattern, tag)
     handles = handles_for(doc, where)
     found = search(doc, pattern, use_raw, regex, scope, handles)
 
     if not found:
         doc.select("body")
         hint = ""
-        if not use_raw and pattern in doc.text()[0]:
+        if not use_raw and u16(pattern) in doc.text()[0]:
             hint = ("  (it does appear in the raw text -- tracked changes may "
                     "split it; try --raw)")
         extra = "" if where == "all" else f" of {where}"
@@ -1337,7 +1933,7 @@ def resolve(doc, pattern, replacement, which, use_raw, regex, scope=None,
     out = []
     for handle, ms in grouped.items():
         doc.select(handle)
-        out.append((handle, check_edits(doc, ms, replacement, regex, label)))
+        out.append((handle, check_edits(doc, ms, replacement, regex, label, anchor_only)))
     doc.select("body")
     return out
 
@@ -1393,22 +1989,34 @@ def cmd_find(args):
           f"{'raw' if args.raw else 'accepted'} text")
     for n, (handle, hay, h, rs) in enumerate(found, 1):
         lo, hi = max(h.start() - 45, 0), min(h.end() + 45, len(hay))
-        pre = hay[lo:h.start()].replace("\n", "⏎")
-        mid = hay[h.start():h.end()]
-        post = hay[h.end():hi].replace("\n", "⏎")
+        pre = show(hay[lo:h.start()]).replace("\n", "⏎")
+        mid = show(hay[h.start():h.end()])
+        post = show(hay[h.end():hi]).replace("\n", "⏎")
         page = page_of(bounds, rs if handle == "body" else doc.anchors[handle])
         where = f"p.{page} " if page else ""
         print(f"  {n:3}. {where}@{rs:<6}{label_of(doc, handle)} "
               f"…{pre}[{mid}]{post}…")
 
 
+def read_text_file(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError as exc:
+        sys.exit(f"cannot read {path}: {exc.strerror or exc}")
+    except UnicodeDecodeError:
+        sys.exit(f"{path} is not UTF-8 text")
+
+
 def cmd_replace(args):
     doc = Document(args.file)
+    if args.expect:                     # a dry run should already say the text has moved
+        check_fingerprint(doc, args.expect, "you took that fingerprint")
     # a file almost always ends with a newline the author did not mean to match
     pattern = (args.find if args.find is not None
-               else open(args.find_file, encoding="utf-8").read().rstrip("\n"))
+               else read_text_file(args.find_file).rstrip("\n"))
     repl = (args.replace if args.replace is not None
-            else open(args.replace_file, encoding="utf-8").read().rstrip("\n"))
+            else read_text_file(args.replace_file).rstrip("\n"))
     which = None if args.all else (args.occurrence or 1)
     groups = resolve(doc, pattern, repl, which, args.raw, args.regex,
                      wanted_scope(args, doc), where=args.where)
@@ -1420,8 +2028,10 @@ def cmd_replace(args):
           f" ({'tracked change' if mode else 'direct replacement'}):")
     for handle, eds in groups:
         for rs, re_, new, old in eds:
-            print(f"  @{rs}{label_of(doc, handle)}  {old!r}  ->  {new!r}")
-            for line in difflib.unified_diff([old + "\n"], [new + "\n"],
+            print(f"  @{rs}{label_of(doc, handle)}  {show(old)!r}  ->  "
+                  f"{show(new)!r}")
+            for line in difflib.unified_diff([show(old) + "\n"],
+                                             [show(new) + "\n"],
                                              "before", "after", n=0,
                                              lineterm="\n"):
                 if line.startswith(("+", "-")) and not line.startswith(
@@ -1432,13 +2042,13 @@ def cmd_replace(args):
         print("\ndry run — pass --write to apply")
         return
 
-    check_fingerprint(doc, args.expect, "you took that fingerprint")
     # Pages writes the whole package on its next save, which would silently
     # discard this edit. Refuse rather than lose work.
     if pages_has_open(args.file):
         sys.exit(f"\nPages has {os.path.basename(args.file)} open — it would "
                  "overwrite this edit on its next save. Close it first.")
 
+    doc.entries.check_unchanged()       # before any snapshot of what is on disk
     cfg = load_config(args.file)
     before = None
     if cfg.get("vcs"):
@@ -1451,7 +2061,7 @@ def cmd_replace(args):
 
     track = cfg.get("track", False) if args.track is None else args.track
     report = apply_groups(doc, groups, track)
-    doc.save(args.file)
+    written = doc.save(args.file)
     total = sum(r[4] for r in report)
     print(f"wrote {args.file}: {len(report)} edit(s)"
           f"{' as tracked changes' if track else ''}, "
@@ -1460,27 +2070,38 @@ def cmd_replace(args):
     if cfg.get("vcs"):
         after = vcs_snapshot(args.file, _summary(edits))
         print(f"committed: {after}")
-    print(f"new fingerprint: {verify(args.file, edits, track)}")
+    print(f"new fingerprint: {verify(args.file, edits, track, written)}")
 
 
 def _summary(edits):
     first = edits[0]
     more = f" (+{len(edits) - 1} more)" if len(edits) > 1 else ""
-    return f"Replace {first[3]!r} -> {first[2]!r}{more}"
+    return f"Replace {show(first[3])!r} -> {show(first[2])!r}{more}"
 
 
-def verify(path, edits, tracked=False):
-    """Re-open the written file and confirm the new text is readable."""
+def verify(path, edits, tracked=False, doc=None):
+    """Confirm the written file reads back and shows the edits.
+
+    `doc` is what `Document.save` returns: the file already re-read and checked by both
+    tools, so only the text needs looking at. Without it the file is opened here.
+    """
     try:
-        doc = Document(path)
-        # every storage, not just the body: an edit may live in a margin note
+        problems = []
+        if doc is None:
+            doc = Document(path)
+            doc.reader.all_paragraphs()         # and pages2md must be able to read it
+            problems = table_problems(doc)
+        # every storage, not just the body: an edit may live in a note
         parts = []
         for handle in doc.slots:
             doc.select(handle)
             parts.append(doc.accepted_map()[0])
         text = "\x00".join(parts)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:      # package_errors reports through sys.exit
         print(f"VERIFY FAILED: cannot re-read {path}: {exc}")
+        return "?"
+    if problems:
+        print(f"VERIFY FAILED: ill-formed tables in {path}: {'; '.join(problems[:4])}")
         return "?"
     missing = [new for _rs, _re, new, _old in edits if new and new not in text]
     stale = [old for _rs, _re, _new, old in edits if tracked and old in text]
@@ -1537,6 +2158,7 @@ def cmd_plan(args):
             groups.setdefault(handle, []).extend(eds)
     groups = list(groups.items())
     flat = flatten(groups)
+    doc.entries.check_unchanged()       # before any snapshot of what is on disk
     cfg = load_config(args.file)
     summary = f"Apply {os.path.basename(args.plan)}: {total} replacement(s)"
     if cfg.get("vcs"):
@@ -1549,41 +2171,48 @@ def cmd_plan(args):
     # One pass for the whole plan: the edits were resolved against a single
     # snapshot, and applying them right-to-left keeps every offset valid.
     report = apply_groups(doc, groups, track)
-    doc.save(args.file)
+    written = doc.save(args.file)
     shifted = sum(r[4] for r in report)
     print(f"\nwrote {args.file}: {len(report)} replacement(s)"
           f"{' as tracked changes' if track else ''}, "
           f"{shifted} character indices shifted")
     if cfg.get("vcs"):
         print(f"committed: {vcs_snapshot(args.file, summary)}")
-    print(f"new fingerprint: {verify(args.file, flat, track)}")
+    print(f"new fingerprint: {verify(args.file, flat, track, written)}")
 
 
 def locate_comment(doc, args):
-    """Find the comment the user means, in whichever storage holds it."""
-    rows = []
+    """Find the comment the user means, in whichever storage holds it.
+
+    Every storage in scope is searched. Stopping at the first one that had
+    any comment made a note's comment unreachable whenever the body had one
+    too. The document is left selected on the storage that holds it.
+    """
+    if args.at is None:
+        require_search_text(args.on)      # "" is inside every comment's text
+    on = u16(args.on).lower() if args.at is None else None
+    found = []
     for handle in handles_for(doc, getattr(args, "where", None) or "all"):
         doc.select(handle)
-        rows = doc.comment_table()
-        if rows:
-            break
-    if args.at is not None:
-        hit = [r for r in rows if r[0] == args.at]
-        if not hit:
-            sys.exit(f"no comment anchored at {args.at}; "
-                     "run `pages2md.py --comments` to list them")
-        if len(hit) > 1:
-            sys.exit(f"{len(hit)} comments share anchor {args.at}; "
-                     "use --on with distinguishing text")
-        return hit[0]
-    raw = doc.text()[0]
-    hit = [r for r in rows if args.on.lower() in raw[r[0]:r[0] + r[1]].lower()]
-    if not hit:
-        sys.exit(f"no comment whose quoted text contains {args.on!r}")
-    if len(hit) > 1:
-        sys.exit(f"{args.on!r} matches {len(hit)} comments at "
-                 f"{[r[0] for r in hit]}; use --at")
-    return hit[0]
+        raw = doc.text()[0]
+        for row in doc.comment_table():
+            if args.at is not None:
+                hit = row[0] == args.at
+            else:
+                hit = on in raw[row[0]:row[0] + row[1]].lower()
+            if hit:
+                found.append((handle, row))
+    what = (f"anchored at {args.at}" if args.at is not None
+            else f"whose quoted text contains {args.on!r}")
+    if not found:
+        sys.exit(f"no comment {what}; run `pages2md.py --comments` to list them")
+    if len(found) > 1:
+        where = ", ".join(f"{h} @{r[0]}" for h, r in found)
+        sys.exit(f"{len(found)} comments {what} ({where}); narrow it with "
+                 f"{'--on' if args.at is not None else '--at'} or --where")
+    handle, row = found[0]
+    doc.select(handle)
+    return row
 
 
 def comment_preamble(args):
@@ -1606,17 +2235,17 @@ def commit(doc, args, summary, describe=None):
     if pages_has_open(args.file):
         sys.exit(f"\nPages has {os.path.basename(args.file)} open — it would "
                  "overwrite this on its next save. Close it first.")
+    doc.entries.check_unchanged()       # before any snapshot of what is on disk
     cfg = load_config(args.file)
     if cfg.get("vcs"):
         vcs_snapshot(args.file, "Before: " + summary)
     elif not args.no_backup:
         shutil.copy2(args.file, args.file + ".bak")
         print(f"backup: {args.file}.bak")
-    doc.save(args.file)
+    check = doc.save(args.file)
     print(f"wrote {args.file}: {summary}")
     if cfg.get("vcs"):
         print(f"committed: {vcs_snapshot(args.file, summary)}")
-    check = Document(args.file)
     if describe:
         print(describe(check))
     print(f"new fingerprint: {fingerprint(check)}")
@@ -1636,7 +2265,7 @@ def finish_struct(doc, args, summary):
 def cmd_comment_add(args):
     doc = comment_preamble(args)
     groups = resolve(doc, args.on, None, 1, False, False,
-                     wanted_scope(args, doc), where=args.where)
+                     wanted_scope(args, doc), where=args.where, anchor_only=True)
     (handle, eds), = groups
     start, end, _new, old = eds[0]
     if handle != "body":
@@ -1646,16 +2275,17 @@ def cmd_comment_add(args):
         # byte-identical in structure to one Pages wrote itself. Something
         # further is required that I have not identified, so refuse rather
         # than write something that silently disappears.
-        sys.exit(f"{old!r} is in {handle}, not the body flow. Comments can be "
+        sys.exit(f"{show(old)!r} is in {handle}, not the body flow. Comments can be "
                  "read there but not written: Pages drops a tool-written one "
                  "on its next save. Add it in Pages, or comment on the body "
                  "text that references it.")
-    print(f"comment on @{start}{label_of(doc, handle)} “{old}”:\n  {args.text}")
+    print(f"comment on @{start}{label_of(doc, handle)} “{show(old)}”:\n"
+          f"  {args.text}")
     if args.write:
         doc.select(handle)
         doc.add_comment(start, end - start, args.text)
         doc.select("body")
-    finish_comment(doc, args, f"Add comment on {old[:40]!r}")
+    finish_comment(doc, args, f"Add comment on {show(old[:40])!r}")
 
 
 def cmd_comment_reply(args):
@@ -1663,7 +2293,7 @@ def cmd_comment_reply(args):
     start, length, ref = locate_comment(doc, args)
     raw = doc.text()[0]
     print(f"reply to the comment on @{start} "
-          f"“{raw[start:start + length][:60]}”:\n  {args.text}")
+          f"“{show(raw[start:start + length][:60])}”:\n  {args.text}")
     if args.write:
         doc.reply_to(ref, args.text)
     finish_comment(doc, args, f"Reply to comment @{start}")
@@ -1673,7 +2303,8 @@ def cmd_comment_delete(args):
     doc = comment_preamble(args)
     start, length, ref = locate_comment(doc, args)
     raw = doc.text()[0]
-    print(f"delete the comment on @{start} “{raw[start:start + length][:60]}”")
+    print(f"delete the comment on @{start} "
+          f"“{show(raw[start:start + length][:60])}”")
     if args.write:
         doc.delete_comment(ref)
     finish_comment(doc, args, f"Delete comment @{start}")
@@ -1686,7 +2317,7 @@ def located_paragraph(doc, start):
     describe or act on "the paragraph the user pointed at".
     """
     raw = doc.select("body").text()[0]
-    ps, pe = para_bounds(raw, start)
+    ps, pe = doc.paragraph_bounds(start)
     return raw, ps, pe
 
 
@@ -1711,10 +2342,26 @@ def one_match(doc, args, needle):
 
 def resolve_style(args):
     styles = style_ids(args.file)
-    if args.style not in styles:
+    key = find_style(styles, args.style)
+    if key is None:
         sys.exit(f"unknown style {args.style!r}; this document has: "
                  + ", ".join(sorted(styles)))
-    return styles[args.style]
+    return styles[key]
+
+
+def find_style(styles, name):
+    """The style key `name` means: exact, else case-insensitive, else the one
+    style whose name is `name` plus a number (`Body` -> `Body 1`). None if
+    nothing or more than one fits."""
+    if name in styles:
+        return name
+    low = name.casefold()
+    for tiers in (lambda k: k.casefold() == low,
+                  lambda k: re.fullmatch(re.escape(low) + r" \d+", k.casefold())):
+        hits = [k for k in styles if tiers(k)]
+        if len(hits) == 1:
+            return hits[0]
+    return None
 
 
 def cmd_retag(args):
@@ -1731,7 +2378,7 @@ def cmd_retag(args):
     raw, ps, pe = located_paragraph(doc, start)
     print(f"retag the paragraph at @{ps} as {args.style!r} ({display!r})"
           + (f", list {args.list!r}" if args.list else "") + ":")
-    print(f"  {raw[ps:pe][:90]!r}")
+    print(f"  {show(raw[ps:pe][:90])!r}")
     if args.write:
         doc.retag(start, style_id, list_id)
     finish_struct(doc, args, f"Retag @{ps} as {args.style}")
@@ -1739,13 +2386,14 @@ def cmd_retag(args):
 
 def cmd_insert(args):
     doc = comment_preamble(args)
-    start, end, _n, old = one_match(doc, args, args.after or args.before)
+    after = args.after is not None                  # "" is given, and refused as empty
+    start, end, _n, old = one_match(doc, args, args.after if after else args.before)
     style_id, display = (resolve_style(args) if args.style else (None, "inherited"))
     raw, ps, pe = located_paragraph(doc, start)
-    at = after_paragraph(raw, pe) if args.after else ps
-    print(f"insert {'after' if args.after else 'before'} the paragraph at @{ps}"
+    at = after_paragraph(raw, pe) if after else ps
+    print(f"insert {'after' if after else 'before'} the paragraph at @{ps}"
           f", as {args.style or 'the surrounding style'} ({display}):")
-    print(f"  anchor: {raw[ps:pe][:80]!r}")
+    print(f"  anchor: {show(raw[ps:pe][:80])!r}")
     print(f"  new:    {args.text[:80]!r}")
     if args.write:
         doc.insert_paragraph(at, args.text, style_id)
@@ -1756,8 +2404,9 @@ def cmd_delete_para(args):
     doc = comment_preamble(args)
     start, end, _n, old = one_match(doc, args, args.on)
     raw, ps, pe = located_paragraph(doc, start)
+    doc.require_no_footnotes(ps, pe, "delete this paragraph")
     print(f"delete the paragraph at @{ps}:")
-    print(f"  {raw[ps:pe][:110]!r}")
+    print(f"  {show(raw[ps:pe][:110])!r}")
     if args.write:
         doc.delete_paragraph(start)
     finish_struct(doc, args, f"Delete paragraph @{ps}")
@@ -1769,8 +2418,11 @@ def cmd_format(args):
     kinds = [k for k, on in (("bold", args.bold), ("italic", args.italic)) if on]
     if not kinds and not args.plain:
         sys.exit("say what to apply: --bold, --italic, or --plain")
+    if kinds and args.plain:
+        sys.exit("--plain removes emphasis; it cannot be combined with "
+                 "--bold or --italic")
     print(f"format @{start} as {', '.join(kinds) if kinds else 'plain'}:")
-    print(f"  {old[:90]!r}")
+    print(f"  {show(old[:90])!r}")
     if args.write:
         doc.select("body")
         doc.format_run(start, end, bold=args.bold, italic=args.italic)
@@ -1780,7 +2432,7 @@ def cmd_format(args):
 
 def cmd_import(args):
     doc = comment_preamble(args)
-    blocks = parse_markdown(open(args.markdown, encoding="utf-8").read())
+    blocks = parse_markdown(u16(read_text_file(args.markdown)))   # runs in Pages' units
     if not blocks:
         sys.exit(f"{args.markdown}: nothing to import")
     styles, lists = style_ids(doc.reader), list_style_ids(doc.reader)
@@ -1794,27 +2446,29 @@ def cmd_import(args):
         title, lo, hi = section_range(args.file, args.replace_section,
                                       len(doc.text()[0]))
         raw = doc.text()[0]
+        doc.require_no_footnotes(lo, hi, f"replace section {title!r}")
         going = doc.paragraph_starts(lo, hi)
         at = lo
         print(f"replace section {title!r} (chars {lo}-{hi}, "
               f"{len(going)} paragraph(s)) with {len(blocks)} from "
               f"{args.markdown}:")
         for s in going[:3]:
-            _a, b = para_bounds(raw, s)
-            print(f"  - {raw[s:b][:66]!r}")
+            _a, b = doc.paragraph_bounds(s)
+            print(f"  - {show(raw[s:b][:66])!r}")
         if len(going) > 3:
             print(f"  - …and {len(going) - 3} more")
     else:
-        start = one_match(doc, args, args.after or args.before)[0]
+        after = args.after is not None
+        start = one_match(doc, args, args.after if after else args.before)[0]
         raw, ps, pe = located_paragraph(doc, start)
-        at = after_paragraph(raw, pe) if args.after else ps
+        at = after_paragraph(raw, pe) if after else ps
         print(f"import {len(blocks)} paragraph(s) from {args.markdown} "
-              f"{'after' if args.after else 'before'} @{ps}:")
-        print(f"  anchor: {raw[ps:pe][:70]!r}")
+              f"{'after' if after else 'before'} @{ps}:")
+        print(f"  anchor: {show(raw[ps:pe][:70])!r}")
     for style, listing, text, runs in blocks:
         tag = f"{style}/{listing}" if listing else style
         mark = f"  ({len(runs)} emphasis run(s))" if runs else ""
-        print(f"  [{tag:<16}] {text[:60]}{mark}")
+        print(f"  [{tag:<16}] {show(text[:60])}{mark}")
 
     if args.replace_section and len(going) > 3:
         sys.exit(
@@ -1823,7 +2477,7 @@ def cmd_import(args):
             "a single write corrupt the document -- Pages opens and saves it, "
             "but every heading in the whole document loses its style. The "
             "cause is not yet found. Refusing rather than risk it; see "
-            "tools/insights.md.")
+            "insights.md.")
 
     if args.write:
         if args.replace_section:
@@ -1910,14 +2564,26 @@ def cmd_revert(args):
         sys.exit(f"Pages has {os.path.basename(args.file)} open — it would "
                  "overwrite the restored version on its next save. Close it "
                  "first.")
+    # Resolve the ref first: the safety snapshot below is a new commit and would
+    # shift what `HEAD~1` means.
+    rev = git(root, "rev-parse", "--verify", "--quiet", f"{args.ref}^{{commit}}", check=False)
+    if rev.returncode:
+        sys.exit(f"unknown version {args.ref!r}; see `history` for the commits")
+    ref = rev.stdout.strip()
     vcs_snapshot(args.file, "Before revert to " + args.ref)
-    blob = subprocess.run(["git", "-C", root, "show", f"{args.ref}:{name}"],
-                          capture_output=True)
+    blob = git(root, "show", f"{ref}:{name}", check=False, text=False)
     if blob.returncode:
         sys.exit(f"cannot read {name} at {args.ref}: "
                  f"{blob.stderr.decode(errors='replace').strip()}")
-    with open(args.file, "wb") as fh:
-        fh.write(blob.stdout)
+    tmp = args.file + ".tmp"            # never leave a half-written document
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(blob.stdout)
+        os.replace(tmp, args.file)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     print(f"restored {name} from {args.ref} ({len(blob.stdout):,} bytes)")
     vcs_snapshot(args.file, "Revert to " + args.ref)
 
@@ -2060,7 +2726,6 @@ def main(argv=None):
         sp.add_argument("file")
         sp.add_argument("--in", dest="in_section", metavar="HEADING")
         sp.add_argument("--page", metavar="N[-M]")
-        sp.add_argument("--where", default="all")
         sp.add_argument("--expect", metavar="FINGERPRINT")
         sp.add_argument("--write", action="store_true")
         sp.add_argument("--no-backup", action="store_true")
@@ -2116,13 +2781,8 @@ def main(argv=None):
     ix.set_defaults(func=cmd_index)
 
     args = ap.parse_args(argv)
-    try:
+    with package_errors(args.file):
         zipfile.ZipFile(args.file).close()
-    except zipfile.BadZipFile:
-        ap.error(f"{args.file} is not a Pages package "
-                 "(an iCloud placeholder/alias? use the real local file)")
-    except FileNotFoundError:
-        ap.error(f"{args.file}: no such file")
     args.func(args)
 
 
