@@ -644,6 +644,30 @@ unverified unless stated. Each one that needs a sample is listed in
 - `pages2md.py` reads the largest text storage, which is the body. Short documents whose
   longest text lives in a text box are not handled.
 
+## Using with Claude
+
+The repo ships two [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skills)
+in `.claude/skills/`, so Claude can use the tools without an MCP server or any setup:
+
+| Skill | Does | Idle cost |
+| --- | --- | --- |
+| `pages-read` | reads a `.pages` file as Markdown, JSON, outline, comments or links; never writes | its description only |
+| `pages-edit` | edits one: dry run first, fingerprint pinned with `--expect`, backups kept, the known limits spelled out (`reference.md` holds the rest) | its description only |
+
+Only the short descriptions are always in Claude's context; a skill's instructions load when
+a request matches it, and `pages-edit` stays unloaded for read-only work.
+
+- **Claude Code (terminal, VS Code extension, web/cloud sessions):** open the checkout, or a
+  repository that contains your documents next to a copy of `.claude/skills/`; nothing else to
+  install. Cloud sessions see only files in the cloned repository.
+- **Other projects on your Mac:** copy the two folders to `~/.claude/skills/` and call the
+  scripts by absolute path.
+- Both need a shell and Python 3.13 (`uv run python`). Page numbers (`--page`) need
+  `pages_edit.py index`, which only works on a Mac with Pages.
+
+The same rules apply as for the command line: edits are a dry run until `--write`, and
+nothing the editor writes has been opened in Pages yet, so use a copy.
+
 ## Development
 
 `CLAUDE.md` has the working rules (architecture, the offset convention, how to investigate

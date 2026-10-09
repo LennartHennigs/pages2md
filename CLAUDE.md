@@ -97,6 +97,14 @@ hint, not evidence). Measure:
   wanted. Edits in tests run on a temporary copy, never on the sample.
 - Never run `--write` on a user's real document without a copy.
 
+## Claude skills
+
+`.claude/skills/pages-read` and `pages-edit` teach Claude the command line. When a flag,
+command or limit changes, change the skill in the same commit: `tests/test_skills.py` runs
+every command quoted in a fenced block and fails on a flag argparse no longer accepts. Keep
+`SKILL.md` short (only the description is always in context) and put the long tail in
+`pages-edit/reference.md`. The read skill must never mention `--write`.
+
 ## Docs and changelog
 
 - `CHANGELOG.md` (Keep a Changelog): add the entry in the **same commit** as the change,

@@ -10,6 +10,12 @@ Add each change here in the same commit that makes it.
 
 ### Added
 
+- Claude Code skills in `.claude/skills/`: `pages-read` (read-only: Markdown, JSON,
+  outline, comments, links, find, fingerprint) and `pages-edit` (dry run first, `--expect`
+  fingerprint, backups, the three-paragraph and Pages-open limits; the long tail of commands
+  is in `reference.md`). Only each skill's description is always in context.
+  `tests/test_skills.py` runs every command the skills quote against a sample and fails when
+  a flag they teach no longer exists, and checks that the read skill never writes.
 - `pages2md.py --links` (or `-t links`) lists every hyperlink: page (with an index), the
   linked text and the URL. `--in` and `--page` narrow it like any other format.
 - Footnotes render as Markdown footnotes: a `[^n]` where the reference stands, numbered
