@@ -117,3 +117,8 @@ Work on a feature branch and push to it; do not open a pull request unless asked
 the whole test suite before committing,
 and compare the rendered output of every sample against the previous commit when you
 change the reader: only the differences you meant to make should show.
+
+`main` is protected by a ruleset (`.github/rulesets/main.json`): no force push, no deletion,
+the `tests` check from `.github/workflows/tests.yml` must pass. Keep the job named `tests`
+and do not add path filters to the workflow (a required check that never runs blocks the
+merge); `tests/test_repo_config.py` fails if they drift.

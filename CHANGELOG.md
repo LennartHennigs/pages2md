@@ -10,6 +10,11 @@ Add each change here in the same commit that makes it.
 
 ### Added
 
+- GitHub Actions workflow (`.github/workflows/tests.yml`) running the test suite on every
+  pull request and push to `main`, and an importable ruleset for `main`
+  (`.github/rulesets/main.json`): no force pushes, no deletion, the `tests` check required.
+  It imports disabled; the README says how to turn it on. `tests/test_repo_config.py` keeps
+  the ruleset's check name and the workflow's job name in step.
 - `pages2md.py --links` (or `-t links`) lists every hyperlink: page (with an index), the
   linked text and the URL. `--in` and `--page` narrow it like any other format.
 - Footnotes render as Markdown footnotes: a `[^n]` where the reference stands, numbered
