@@ -766,6 +766,20 @@ a field). In short: write the failing test first, keep `CHANGELOG.md` current in
 commit, never commit a document with a real author's name in it, and check any write
 against a **copy** of a real document.
 
+## Continuous integration and branch protection
+
+`.github/workflows/tests.yml` runs the whole suite on every pull request and every push to
+`main` (Python from `.python-version`, no dependencies; the macOS-only parts are faked, as
+they are locally). Its one job is called `tests`.
+
+`.github/rulesets/main.json` is a GitHub ruleset for `main` that blocks force pushes and
+deletion and requires the `tests` check to pass. GitHub rulesets cannot be applied from the
+repository itself, so import it once: **Settings -> Rules -> Rulesets -> New ruleset -> Import
+a ruleset**. It imports as *disabled*. Merge the workflow to `main` first and let `tests` run
+once (GitHub only offers checks it has seen), then set Enforcement to *Active*. There are no
+bypass actors, so as the repository owner you will be held to the same rules; with the
+required check in place, changes to `main` go through a pull request.
+
 ## Verifying a change to these tools
 
 First, the unit tests (stdlib only, no Pages needed; `tests/PLAN.md` lists what is still
