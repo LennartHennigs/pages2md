@@ -15,6 +15,27 @@ Add each change here in the same commit that makes it.
   (`.github/rulesets/main.json`): no force pushes, no deletion, the `tests` check required.
   It imports disabled; the README says how to turn it on. `tests/test_repo_config.py` keeps
   the ruleset's check name and the workflow's job name in step.
+- `pages_mcp.py`: an MCP server over stdio and, with `--http`, over HTTP (`POST /mcp`, bearer
+  token from `PAGES_MCP_TOKEN`, Host and Origin checks, 1 MiB limit). Four tools --
+  `pages_read`, `pages_find`, `pages_replace`, `pages_edit` -- run the real scripts. Only
+  `.pages` files under `--root` / `PAGES_MCP_ROOTS` are reachable (symlinks and `..`
+  resolved first); edits are a dry run unless `write`, and a write needs `expect` (the
+  fingerprint); one write at a time; `--read-only` offers the read tools only. Standard
+  library only. `tests/test_mcp.py` covers the protocol, the path guard, the write rules and
+  both transports, and checks every `pages_edit` command is a real subcommand. Verified
+  against Claude Code (stdio and HTTP, good and bad token); a tunnel, a claude.ai connector
+  and VS Code's `mcp.json` are not.
+- Claude Code plugin and marketplace (`.claude-plugin/`, `skills/`): the repository is its
+  own marketplace (`/plugin marketplace add LennartHennigs/pages2md`, then
+  `/plugin install pages2md@pages2md`) with two skills. `pages-read` is read-only
+  (Markdown, JSON, outline, comments, links, find, fingerprint). `pages-edit` is dry run
+  first, `--expect` fingerprint, backups, the three-paragraph and Pages-open limits; the
+  long tail of commands is in `reference.md`. The skills call the scripts through
+  `${CLAUDE_PLUGIN_ROOT}`. Only each skill's description is always in context. No version
+  is pinned, so installs follow the repository.
+  `tests/test_skills.py` runs every command the skills quote against a sample and fails when
+  a flag they teach no longer exists, checks the manifests agree with each other, and checks
+  that the read skill never writes.
 - `pages2md.py --links` (or `-t links`) lists every hyperlink: page (with an index), the
   linked text and the URL. `--in` and `--page` narrow it like any other format.
 - Footnotes render as Markdown footnotes: a `[^n]` where the reference stands, numbered

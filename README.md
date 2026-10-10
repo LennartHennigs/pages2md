@@ -644,6 +644,121 @@ unverified unless stated. Each one that needs a sample is listed in
 - `pages2md.py` reads the largest text storage, which is the body. Short documents whose
   longest text lives in a text box are not handled.
 
+## Using with Claude
+
+This repository is also a Claude Code plugin marketplace. It carries two
+[skills](https://docs.claude.com/en/docs/claude-code/skills), so Claude can read and edit
+`.pages` files on your machine without an MCP server:
+
+| Skill | Does |
+| --- | --- |
+| `pages-read` | reads a `.pages` file as Markdown, JSON, outline, comments or links; never writes |
+| `pages-edit` | edits one: dry run first, fingerprint pinned with `--expect`, backups kept, the known limits spelled out (`reference.md` holds the rest) |
+
+Only each skill's one-line description is always in Claude's context; the instructions load
+when a request matches, so `pages-edit` stays unloaded for read-only work.
+
+```text
+/plugin marketplace add LennartHennigs/pages2md
+/plugin install pages2md@pages2md
+```
+
+Run those in Claude Code (terminal or the VS Code extension). On Claude Code 2.1.275 or
+later, `/plugin install pages2md --marketplace LennartHennigs/pages2md` does both in one
+step. The plugin copies the whole repository, so the scripts the skills call travel with
+them and need nothing else installed. `/plugin marketplace update` pulls new commits; there
+is no pinned version, so every push to `main` is an update.
+
+- **Where it runs:** on the machine that has the `.pages` file. A cloud session only sees
+  files in its cloned repository, so for a document on your Mac use Claude Code locally.
+- **Needs:** a shell and Python 3.13+. Page numbers (`--page`) need `pages_edit.py index`,
+  which only works on a Mac with Pages.
+- **Working on the skills:** `claude --plugin-dir .` loads them from the checkout, and
+  `/reload-plugins` picks up edits. `claude plugin validate .` checks the manifests (it warns
+  about `CLAUDE.md` at the plugin root and the missing version; both are intentional).
+- **No Claude Code?** The command lines in `skills/pages-read/SKILL.md` and
+  `skills/pages-edit/` work in any terminal.
+
+The same rules apply as for the command line: edits are a dry run until `--write`, and
+nothing the editor writes has been opened in Pages yet, so use a copy.
+
+### MCP server
+
+`pages_mcp.py` is the same tools as an [MCP](https://modelcontextprotocol.io) server, for
+clients that have no shell (Copilot chat, Claude Desktop) and for cloud Claude reaching
+documents on your Mac. If you use Claude Code locally, the skills above are cheaper
+(about 170 tokens idle against roughly 1.3k for the four tool schemas, estimated from their size) and need no setup.
+It is not part of the plugin; run it from a clone. Standard library only, like the rest.
+
+| Tool | Does |
+| --- | --- |
+| `pages_read` | Markdown, plain, JSON, outline, comments, links, styles, or the fingerprint |
+| `pages_find` | numbered matches with offsets and context |
+| `pages_replace` | find and replace; dry run unless `write`, and a write needs `expect` |
+| `pages_edit` | comments, insert, retag, format, delete a paragraph, import Markdown, plans, history, revert, config |
+
+Each call builds a command line and runs the real script, so a tool and its command say
+the same thing. What it adds on top:
+
+- **Folders:** only `.pages` files under a `--root DIR` (repeatable) or `PAGES_MCP_ROOTS`
+  are reachable; symlinks and `..` are resolved first. With no root, every call is refused.
+- **Writes:** a dry run unless `write: true`, and a write is refused without `expect` (the
+  fingerprint from `pages_read` with `format: fingerprint`), which is stricter than the
+  command line. One write runs at a time. `--no-backup` and file-path options are not
+  exposed. `--read-only` leaves out `pages_replace` and `pages_edit` altogether.
+- **Output** is capped at 100,000 characters; use `in_section` to read a long document.
+
+**Local (stdio).** From a clone:
+
+```bash
+claude mcp add pages -e PAGES_MCP_ROOTS=$HOME/Documents -- python3 /path/to/pages2md/pages_mcp.py
+```
+
+For VS Code, `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "pages": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["/path/to/pages2md/pages_mcp.py"],
+      "env": { "PAGES_MCP_ROOTS": "/Users/me/Documents" }
+    }
+  }
+}
+```
+
+**Over HTTP**, for a client that cannot start a process on your Mac, such as a cloud
+session. The server listens on `127.0.0.1` only; you put a tunnel in front of it.
+
+```bash
+export PAGES_MCP_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+python3 pages_mcp.py --http --root ~/Documents --allow-host pages.example.com
+tailscale funnel 8765          # or: cloudflared tunnel --url http://localhost:8765
+claude mcp add --transport http pages https://pages.example.com/mcp \
+    --header "Authorization: Bearer $PAGES_MCP_TOKEN"
+```
+
+- The token comes from the environment, never the command line, must be at least 16
+  characters, and is compared in constant time. Without it the server does not start.
+- `--allow-host` must name the host your tunnel presents, or requests get a 403 (the Host
+  header is checked, as the MCP spec asks, against DNS rebinding). Browser origins are
+  refused unless you add `--allow-origin`.
+- Requests are `POST /mcp` with JSON replies, one message each (no batches, no streaming),
+  at most 1 MiB.
+- **Anyone with the token and the URL can edit documents under the roots.** Keep `--root`
+  narrow, prefer a copy of the document, consider `--read-only`, and rotate the token if it
+  leaks. The Mac has to be awake and the tunnel running.
+
+Checked with Claude Code: both transports connect, and a wrong token is rejected. **Not
+checked:** a tunnel, a claude.ai connector, or VS Code's `mcp.json`. Cloud sessions use
+connectors added at claude.ai/customize/connectors, and the documentation does not say
+whether those accept a custom `Authorization` header. If yours does not, put Cloudflare
+Access in front of the tunnel, or stay with local Claude Code. The tunnel host must also be
+allowed by the cloud environment's network settings. As everywhere, nothing the editor
+writes has been opened in Pages yet.
+
 ## Development
 
 `CLAUDE.md` has the working rules (architecture, the offset convention, how to investigate
