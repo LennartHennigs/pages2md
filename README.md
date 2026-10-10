@@ -644,6 +644,44 @@ unverified unless stated. Each one that needs a sample is listed in
 - `pages2md.py` reads the largest text storage, which is the body. Short documents whose
   longest text lives in a text box are not handled.
 
+## Using with Claude
+
+This repository is also a Claude Code plugin marketplace. It carries two
+[skills](https://docs.claude.com/en/docs/claude-code/skills), so Claude can read and edit
+`.pages` files on your machine without an MCP server:
+
+| Skill | Does |
+| --- | --- |
+| `pages-read` | reads a `.pages` file as Markdown, JSON, outline, comments or links; never writes |
+| `pages-edit` | edits one: dry run first, fingerprint pinned with `--expect`, backups kept, the known limits spelled out (`reference.md` holds the rest) |
+
+Only each skill's one-line description is always in Claude's context; the instructions load
+when a request matches, so `pages-edit` stays unloaded for read-only work.
+
+```text
+/plugin marketplace add LennartHennigs/pages2md
+/plugin install pages2md@pages2md
+```
+
+Run those in Claude Code (terminal or the VS Code extension). On Claude Code 2.1.275 or
+later, `/plugin install pages2md --marketplace LennartHennigs/pages2md` does both in one
+step. The plugin copies the whole repository, so the scripts the skills call travel with
+them and need nothing else installed. `/plugin marketplace update` pulls new commits; there
+is no pinned version, so every push to `main` is an update.
+
+- **Where it runs:** on the machine that has the `.pages` file. A cloud session only sees
+  files in its cloned repository, so for a document on your Mac use Claude Code locally.
+- **Needs:** a shell and Python 3.13+. Page numbers (`--page`) need `pages_edit.py index`,
+  which only works on a Mac with Pages.
+- **Working on the skills:** `claude --plugin-dir .` loads them from the checkout, and
+  `/reload-plugins` picks up edits. `claude plugin validate .` checks the manifests (it warns
+  about `CLAUDE.md` at the plugin root and the missing version; both are intentional).
+- **No Claude Code?** The command lines in `skills/pages-read/SKILL.md` and
+  `skills/pages-edit/` work in any terminal.
+
+The same rules apply as for the command line: edits are a dry run until `--write`, and
+nothing the editor writes has been opened in Pages yet, so use a copy.
+
 ## Development
 
 `CLAUDE.md` has the working rules (architecture, the offset convention, how to investigate

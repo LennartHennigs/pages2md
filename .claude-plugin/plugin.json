@@ -1,0 +1,9 @@
+{
+  "name": "pages2md",
+  "description": "Read and edit Apple Pages (.pages) documents from Claude Code: Markdown, JSON, outline, comments and links; guarded find and replace, comments and structure edits. Standard library only.",
+  "author": { "name": "Lennart Hennigs" },
+  "homepage": "https://github.com/LennartHennigs/pages2md",
+  "repository": "https://github.com/LennartHennigs/pages2md",
+  "license": "MIT",
+  "keywords": ["pages", "apple-pages", "markdown", "documents"]
+}

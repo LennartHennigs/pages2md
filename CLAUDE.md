@@ -97,6 +97,21 @@ hint, not evidence). Measure:
   wanted. Edits in tests run on a temporary copy, never on the sample.
 - Never run `--write` on a user's real document without a copy.
 
+## Claude plugin and skills
+
+The repo is a Claude Code plugin marketplace: `.claude-plugin/marketplace.json` lists one
+plugin, `pages2md`, whose root is the repo root (`source: "./"`), so installing it copies
+the scripts too. `skills/pages-read` and `skills/pages-edit` teach Claude the command line
+and call the scripts as `${CLAUDE_PLUGIN_ROOT}/pages_edit.py`. When a flag, command or
+limit changes, change the skill in the same commit: `tests/test_skills.py` runs every
+command quoted in a fenced block and fails on a flag argparse no longer accepts. Keep
+`SKILL.md` short (only the description is always in context) and put the long tail in
+`pages-edit/reference.md`. The read skill must never mention `--write`. Do not add
+a `.claude/skills/` copy (the skills would load twice) and do not pin a `version` in
+`plugin.json` (users would stop receiving updates). Check manifests with
+`claude plugin validate .`; `CLAUDE.md` at the plugin root and the missing version are
+expected warnings.
+
 ## Docs and changelog
 
 - `CHANGELOG.md` (Keep a Changelog): add the entry in the **same commit** as the change,

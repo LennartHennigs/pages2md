@@ -10,6 +10,17 @@ Add each change here in the same commit that makes it.
 
 ### Added
 
+- Claude Code plugin and marketplace (`.claude-plugin/`, `skills/`): the repository is its
+  own marketplace (`/plugin marketplace add LennartHennigs/pages2md`, then
+  `/plugin install pages2md@pages2md`) with two skills. `pages-read` is read-only
+  (Markdown, JSON, outline, comments, links, find, fingerprint). `pages-edit` is dry run
+  first, `--expect` fingerprint, backups, the three-paragraph and Pages-open limits; the
+  long tail of commands is in `reference.md`. The skills call the scripts through
+  `${CLAUDE_PLUGIN_ROOT}`. Only each skill's description is always in context. No version
+  is pinned, so installs follow the repository.
+  `tests/test_skills.py` runs every command the skills quote against a sample and fails when
+  a flag they teach no longer exists, checks the manifests agree with each other, and checks
+  that the read skill never writes.
 - `pages2md.py --links` (or `-t links`) lists every hyperlink: page (with an index), the
   linked text and the URL. `--in` and `--page` narrow it like any other format.
 - Footnotes render as Markdown footnotes: a `[^n]` where the reference stands, numbered

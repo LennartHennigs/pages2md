@@ -1,0 +1,12 @@
+{
+  "name": "pages2md",
+  "description": "Skills for reading and editing Apple Pages documents",
+  "owner": { "name": "Lennart Hennigs" },
+  "plugins": [
+    {
+      "name": "pages2md",
+      "source": "./",
+      "description": "pages-read and pages-edit skills plus the pages2md.py / pages_edit.py scripts they call"
+    }
+  ]
+}
