@@ -6,7 +6,7 @@ without breaking it.
 
 ## What this is
 
-Three Python files, standard library only (no `protobuf`, no `snappy`, no Pages), on one
+Four Python files, standard library only (no `protobuf`, no `snappy`, no Pages), on one
 Python version: 3.13, pinned in `.python-version` and run with `uv` (`uv run python ...`):
 
 | File | Role |
@@ -14,6 +14,7 @@ Python version: 3.13, pinned in `.python-version` and run with `uv` (`uv run pyt
 | `iwa_codec.py` | lossless protobuf + IWA (Snappy, chunk framing, archive framing). Round-trips byte for byte. |
 | `pages2md.py` | the **reader**: `PagesDoc`, Markdown/plain/JSON rendering, outline, page index, fingerprint, UTF-16 helpers. |
 | `pages_edit.py` | the **editor**: `Document`, attribute-table surgery, comments, tracked changes, plans, history. |
+| `pages_mcp.py` | an MCP server (stdio, `--http`) that runs the two scripts above as subprocesses; it imports none of them. |
 
 The dependency points one way: `pages_edit` imports `pages2md` imports `iwa_codec`.
 Anything the editor needs that is also a reading concern (outline, fingerprint, style
@@ -111,6 +112,19 @@ a `.claude/skills/` copy (the skills would load twice) and do not pin a `version
 `plugin.json` (users would stop receiving updates). Check manifests with
 `claude plugin validate .`; `CLAUDE.md` at the plugin root and the missing version are
 expected warnings.
+
+## MCP server
+
+`pages_mcp.py` builds a command line per tool call and runs the real script, so it cannot
+disagree with the CLI; keep it that way (no importing `Document`). When a `pages_edit`
+subcommand or flag changes, update `EDIT_COMMANDS` / the builders there; `tests/test_mcp.py`
+fails if a command is no longer a subcommand. Keep the safety layer: paths resolved with
+`realpath` and checked against the roots, option values passed as `--opt=value` and
+positionals after `--` (a value must never become a flag), writes behind `write: true` plus
+`expect`, one write at a time. The HTTP token comes from `PAGES_MCP_TOKEN` only, never an
+argument. Four tools on purpose: every schema is in context on each session, and a test caps
+the size. Do not add a `.mcp.json` to the plugin (it would put the schemas in every session
+that already has the skills).
 
 ## Docs and changelog
 

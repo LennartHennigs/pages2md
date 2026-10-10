@@ -10,6 +10,16 @@ Add each change here in the same commit that makes it.
 
 ### Added
 
+- `pages_mcp.py`: an MCP server over stdio and, with `--http`, over HTTP (`POST /mcp`, bearer
+  token from `PAGES_MCP_TOKEN`, Host and Origin checks, 1 MiB limit). Four tools --
+  `pages_read`, `pages_find`, `pages_replace`, `pages_edit` -- run the real scripts. Only
+  `.pages` files under `--root` / `PAGES_MCP_ROOTS` are reachable (symlinks and `..`
+  resolved first); edits are a dry run unless `write`, and a write needs `expect` (the
+  fingerprint); one write at a time; `--read-only` offers the read tools only. Standard
+  library only. `tests/test_mcp.py` covers the protocol, the path guard, the write rules and
+  both transports, and checks every `pages_edit` command is a real subcommand. Verified
+  against Claude Code (stdio and HTTP, good and bad token); a tunnel, a claude.ai connector
+  and VS Code's `mcp.json` are not.
 - Claude Code plugin and marketplace (`.claude-plugin/`, `skills/`): the repository is its
   own marketplace (`/plugin marketplace add LennartHennigs/pages2md`, then
   `/plugin install pages2md@pages2md`) with two skills. `pages-read` is read-only
